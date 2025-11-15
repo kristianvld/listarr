@@ -1,8 +1,11 @@
 services:
   listarr:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Use pre-built image from GHCR
+    image: ghcr.io/kristianvld/listarr:latest
+    # Or build from source (uncomment to use):
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     container_name: listarr
     restart: unless-stopped
     ports:
