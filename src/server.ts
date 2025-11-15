@@ -288,11 +288,12 @@ export async function refreshData(config: Config): Promise<void> {
   console.log(`Total entries: ${allEntries.length}`);
 }
 
-function formatListEntry(entry: MediaEntry): Record<string, unknown> {
-  const result: Record<string, unknown> = { title: entry.title, year: entry.year };
-  if (entry.tmdb) result.tmdbId = entry.tmdb;
-  if (entry.tvdb) result.tvdbId = entry.tvdb;
-  return result;
+function formatListEntrySonarr(entry: MediaEntry): Record<string, unknown> {
+  return { title: entry.title, year: entry.year, tvdbId: entry.tvdb };
+}
+
+function formatListEntryRadarr(entry: MediaEntry): Record<string, unknown> {
+  return { title: entry.title, year: entry.year, id: entry.tmdb };
 }
 
 // Helper to filter entries for endpoints
@@ -309,24 +310,24 @@ export function createServer(config: Config) {
 
       // Radarr endpoints
       if (pathname === "/radarr/anime") {
-        return new Response(JSON.stringify(filterEntries("movie", true, "tmdb").map(formatListEntry)), {
+        return new Response(JSON.stringify(filterEntries("movie", true, "tmdb").map(formatListEntryRadarr)), {
           headers: { "Content-Type": "application/json" },
         });
       }
       if (pathname === "/radarr/movies") {
-        return new Response(JSON.stringify(filterEntries("movie", false, "tmdb").map(formatListEntry)), {
+        return new Response(JSON.stringify(filterEntries("movie", false, "tmdb").map(formatListEntryRadarr)), {
           headers: { "Content-Type": "application/json" },
         });
       }
 
       // Sonarr endpoints
       if (pathname === "/sonarr/anime") {
-        return new Response(JSON.stringify(filterEntries("tv", true, "tvdb").map(formatListEntry)), {
+        return new Response(JSON.stringify(filterEntries("tv", true, "tvdb").map(formatListEntrySonarr)), {
           headers: { "Content-Type": "application/json" },
         });
       }
       if (pathname === "/sonarr/shows") {
-        return new Response(JSON.stringify(filterEntries("tv", false, "tvdb").map(formatListEntry)), {
+        return new Response(JSON.stringify(filterEntries("tv", false, "tvdb").map(formatListEntrySonarr)), {
           headers: { "Content-Type": "application/json" },
         });
       }
