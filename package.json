@@ -1,0 +1,17 @@
+{
+  "name": "listarr",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "ky": "^1.14.0",
+    "zod": "^4.1.12"
+  }
+}

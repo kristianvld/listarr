@@ -1,0 +1,15 @@
+{
+    "letterboxd": [
+        "username1",
+        "username2",
+        "username3"
+    ],
+    "myanimelist": [
+        "username1",
+        "username2",
+        "username3"
+    ],
+    "discordWebhook": "https://discord.com/api/webhooks/...",
+    "port": 3000,
+    "refreshInterval": 300
+}

@@ -1,0 +1,25 @@
+services:
+  listarr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: listarr
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Data directory for persistent storage
+      - DATA_DIR=/app/data
+      # Letterboxd users (comma or space separated)
+      - LETTERBOXD_USERS=username1,username2,username3
+      # MyAnimeList users (comma or space separated)
+      - MYANIMELIST_USERS=username1,username2,username3
+      # Discord webhook (optional, leave empty to disable)
+      - DISCORD_WEBHOOK=
+      # Server port (optional, defaults to 3000)
+      - PORT=3000
+      # Refresh interval in seconds (optional, defaults to 300)
+      - REFRESH_INTERVAL=300
+    volumes:
+      # Persist announced.jsonl across restarts
+      - ./data:/app/data:rw
