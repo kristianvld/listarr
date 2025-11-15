@@ -20,6 +20,25 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch full history to check if tag is on main
+
+      - name: Verify tag is on main branch
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          TAG_COMMIT=$(git rev-parse $TAG_NAME)
+          echo "Checking if tag $TAG_NAME (commit $TAG_COMMIT) is on main branch..."
+
+          # Fetch main branch
+          git fetch origin main:main 2>/dev/null || git fetch origin main || true
+
+          # Check if the tag's commit is reachable from main
+          if ! git branch -r --contains $TAG_COMMIT | grep -q "origin/main"; then
+            echo "Error: Tag $TAG_NAME is not on main branch. Aborting build for security."
+            exit 1
+          fi
+
+          echo "✓ Tag $TAG_NAME is on main branch"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
