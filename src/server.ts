@@ -105,6 +105,8 @@ export async function sendDiscordErrorNotification(config: Config, title: string
   }
 
   const message = {
+    username: "Listarr",
+    avatar_url: "https://raw.githubusercontent.com/kristianvld/listarr/refs/heads/main/assets/logo.png",
     embeds: [embed],
   };
 
@@ -223,6 +225,8 @@ async function sendDiscordNotification(entry: MediaEntry, config: Config, imageU
   }
 
   const message = {
+    username: "Listarr",
+    avatar_url: "https://raw.githubusercontent.com/kristianvld/listarr/refs/heads/main/assets/logo.png",
     embeds: [embed],
   };
 
