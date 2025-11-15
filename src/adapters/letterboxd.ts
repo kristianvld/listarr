@@ -3,6 +3,24 @@ import { idLookup } from "../id-lookup";
 import type { MediaEntry } from "./schemas";
 import * as cheerio from "cheerio";
 
+// Rate limiting for Letterboxd requests to avoid overwhelming the server
+let lastLetterboxdRequest = 0;
+const LETTERBOXD_MIN_DELAY = 200; // 5 requests/second max
+
+async function rateLimitedRequest<T>(fn: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const timeSinceLastRequest = now - lastLetterboxdRequest;
+  if (timeSinceLastRequest < LETTERBOXD_MIN_DELAY) {
+    const waitTime = LETTERBOXD_MIN_DELAY - timeSinceLastRequest;
+    if (waitTime > 1000) {
+      console.log(`[RATE LIMIT] Waiting ${waitTime.toFixed(0)}ms before Letterboxd request`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+  }
+  lastLetterboxdRequest = Date.now();
+  return fn();
+}
+
 export async function scrapeLetterboxdWatchlist(username: string, announced: { byKey: Set<string> }, onEntryProcessed: (entry: MediaEntry) => Promise<void>): Promise<void> {
   // Handle pagination - start with page 1
   let currentPage = 1;
@@ -11,7 +29,7 @@ export async function scrapeLetterboxdWatchlist(username: string, announced: { b
   while (hasMorePages) {
     const url = currentPage === 1 ? `https://letterboxd.com/${username}/watchlist/` : `https://letterboxd.com/${username}/watchlist/page/${currentPage}/`;
 
-    const html = await fetchHtml(url);
+    const html = await rateLimitedRequest(() => fetchHtml(url));
     const $ = cheerio.load(html);
 
     // Letterboxd watchlist uses li.griditem with data attributes
@@ -88,7 +106,7 @@ export async function scrapeLetterboxdWatchlist(username: string, announced: { b
         // Get poster image URL from poster endpoint (most reliable)
         try {
           const posterJsonUrl = `https://letterboxd.com/film/${slug}/poster/std/250/`;
-          const posterData = (await fetchJson(posterJsonUrl)) as { url?: string };
+          const posterData = (await rateLimitedRequest(() => fetchJson(posterJsonUrl))) as { url?: string };
           if (posterData?.url) {
             imageUrl = posterData.url;
           }
@@ -108,7 +126,7 @@ export async function scrapeLetterboxdWatchlist(username: string, announced: { b
         if (!tmdbId || !isAnime) {
           try {
             const filmPageUrl = `https://letterboxd.com/film/${slug}/`;
-            const filmPageHtml = await fetchHtml(filmPageUrl);
+            const filmPageHtml = await rateLimitedRequest(() => fetchHtml(filmPageUrl));
             const $filmPage = cheerio.load(filmPageHtml);
 
             // Fallback: Look for TMDB link if not found in lookup

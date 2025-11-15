@@ -2,7 +2,7 @@ import type { Config } from "./config";
 import { scrapeLetterboxdWatchlist } from "./adapters/letterboxd";
 import { scrapeMyAnimeListWatchlist } from "./adapters/myanimelist";
 import { AnnouncedEntrySchema, type AnnouncedEntry, type MediaEntry } from "./adapters/schemas";
-import { httpClient } from "./utils";
+import { httpClient, getDiscordRateLimitInfo } from "./utils";
 
 // Use data directory if specified via env, otherwise default to current directory (for local development)
 const DATA_DIR = process.env.DATA_DIR || ".";
@@ -96,14 +96,36 @@ const DISCORD_AVATAR_URL = "https://raw.githubusercontent.com/kristianvld/listar
 
 async function sendDiscordWebhook(webhookUrl: string, embed: Record<string, unknown>): Promise<void> {
   try {
-    await httpClient.post(webhookUrl, {
+    const response = await httpClient.post(webhookUrl, {
       json: {
         username: DISCORD_USERNAME,
         avatar_url: DISCORD_AVATAR_URL,
         embeds: [embed],
       },
     });
+
+    // Log rate limit info if available
+    const rateLimitInfo = getDiscordRateLimitInfo(response);
+    if (rateLimitInfo) {
+      if (rateLimitInfo.remaining !== undefined && rateLimitInfo.limit !== undefined) {
+        const percentRemaining = (rateLimitInfo.remaining / rateLimitInfo.limit) * 100;
+        if (percentRemaining < 20) {
+          console.log(`[RATE LIMIT] Discord webhook: ${rateLimitInfo.remaining}/${rateLimitInfo.limit} requests remaining (${percentRemaining.toFixed(1)}%)`);
+        }
+      }
+    }
   } catch (error) {
+    // Check for rate limit info in error response
+    const responseHeaders = (error as { response?: { status?: number; headers?: Headers } })?.response?.headers;
+    const statusCode = (error as { response?: { status?: number } })?.response?.status;
+
+    if (statusCode === 429 && responseHeaders) {
+      const rateLimitInfo = getDiscordRateLimitInfo(responseHeaders as unknown as Response);
+      if (rateLimitInfo?.resetAfter) {
+        console.warn(`[RATE LIMIT] Discord webhook rate limited. Reset after: ${rateLimitInfo.resetAfter}s`);
+      }
+    }
+
     console.warn("[ERROR] Failed to send Discord webhook:", error);
   }
 }
@@ -241,8 +263,10 @@ export async function refreshData(config: Config): Promise<void> {
   console.log("Refreshing data...");
   const announced = await loadAnnouncedEntries();
 
-  // Scrape both sources
-  const [letterboxdEntries, malEntries] = await Promise.all([scrapeSource("Letterboxd", config.letterboxd, announced, scrapeLetterboxdWatchlist, config, async () => {}), scrapeSource("MyAnimeList", config.myanimelist, announced, scrapeMyAnimeListWatchlist, config, async () => {})]);
+  // Scrape sources sequentially to avoid overwhelming APIs (especially Jikan)
+  // This prevents both scrapers from competing for rate limits
+  const letterboxdEntries = await scrapeSource("Letterboxd", config.letterboxd, announced, scrapeLetterboxdWatchlist, config, async () => {});
+  const malEntries = await scrapeSource("MyAnimeList", config.myanimelist, announced, scrapeMyAnimeListWatchlist, config, async () => {});
 
   // Merge new entries with existing entries (avoid duplicates)
   const newEntries = [...letterboxdEntries, ...malEntries];

@@ -19,15 +19,34 @@ export const httpClient = ky.create({
   hooks: {
     beforeRetry: [
       async ({ error, retryCount, request }) => {
-        // Exponential backoff: 1s, 2s, 4s
-        const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000);
         const url = request.url;
-        console.log(`[RETRY] Retry attempt ${retryCount} for ${url} after ${delay}ms delay`);
+        const statusCode = (error as { response?: { status?: number; headers?: Headers } })?.response?.status;
+        const responseHeaders = (error as { response?: { status?: number; headers?: Headers } })?.response?.headers;
+        const isRateLimit = statusCode === 429;
+
+        // Check for Retry-After header (preferred over exponential backoff)
+        let delay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000); // Default exponential backoff
+        let usedRetryAfter = false;
+        if (isRateLimit && responseHeaders) {
+          const retryAfter = getRetryAfterSeconds(responseHeaders as unknown as Response);
+          if (retryAfter !== null && retryAfter > 0) {
+            delay = retryAfter * 1000; // Convert seconds to milliseconds
+            usedRetryAfter = true;
+            console.log(`[RATE LIMIT] Using Retry-After header: ${retryAfter}s (${delay}ms)`);
+          }
+        }
+
+        console.log(`[RETRY] Retry attempt ${retryCount} for ${url} after ${delay}ms delay${isRateLimit ? " (rate limited)" : ""}`);
         if (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
-          const statusCode = (error as { response?: { status?: number } })?.response?.status;
           console.log(`[RETRY] Error: ${errorMsg}${statusCode ? ` (HTTP ${statusCode})` : ""}`);
         }
+
+        // Log longer delays more prominently
+        if (delay >= 2000) {
+          console.log(`[RATE LIMIT] Waiting ${delay}ms before retry${usedRetryAfter ? " (from Retry-After header)" : " (exponential backoff)"}`);
+        }
+
         await new Promise((resolve) => setTimeout(resolve, delay));
       },
     ],
@@ -41,9 +60,51 @@ export async function fetchHtml(url: string): Promise<string> {
   return await response.text();
 }
 
-// Helper to get JSON
-export async function fetchJson(url: string, options?: { headers?: Record<string, string> }): Promise<unknown> {
+// Helper to get JSON (returns response for header access)
+export async function fetchJsonResponse(url: string, options?: { headers?: Record<string, string> }): Promise<Response> {
   console.log(`Fetching JSON from ${url}`);
-  const response = await httpClient.get(url, options);
+  return await httpClient.get(url, options);
+}
+
+// Helper to get JSON (returns parsed data)
+export async function fetchJson(url: string, options?: { headers?: Record<string, string> }): Promise<unknown> {
+  const response = await fetchJsonResponse(url, options);
   return await response.json();
+}
+
+// Helper to extract Retry-After header value (in seconds)
+export function getRetryAfterSeconds(response: Response): number | null {
+  const retryAfter = response.headers.get("Retry-After");
+  if (!retryAfter) return null;
+
+  // Retry-After can be either seconds (number) or HTTP date
+  const seconds = parseInt(retryAfter, 10);
+  if (!isNaN(seconds)) {
+    return seconds;
+  }
+
+  // Try parsing as HTTP date
+  const date = new Date(retryAfter);
+  if (!isNaN(date.getTime())) {
+    const now = Date.now();
+    const waitSeconds = Math.ceil((date.getTime() - now) / 1000);
+    return Math.max(0, waitSeconds);
+  }
+
+  return null;
+}
+
+// Helper to extract Discord rate limit headers
+export function getDiscordRateLimitInfo(response: Response): { resetAfter?: number; remaining?: number; limit?: number } | null {
+  const resetAfter = response.headers.get("X-RateLimit-Reset-After");
+  const remaining = response.headers.get("X-RateLimit-Remaining");
+  const limit = response.headers.get("X-RateLimit-Limit");
+
+  if (!resetAfter && !remaining && !limit) return null;
+
+  return {
+    resetAfter: resetAfter ? parseFloat(resetAfter) : undefined,
+    remaining: remaining ? parseInt(remaining, 10) : undefined,
+    limit: limit ? parseInt(limit, 10) : undefined,
+  };
 }

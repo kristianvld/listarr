@@ -1,26 +1,81 @@
 import { z } from "zod";
-import { fetchJson } from "../utils";
+import { fetchJson, fetchJsonResponse, getRetryAfterSeconds } from "../utils";
 import { MyAnimeListEntrySchema, AnnouncedEntrySchema, JikanAnimeSchema, type MediaEntry } from "./schemas";
 import { idLookup } from "../id-lookup";
 
 const JIKAN_BASE = "https://api.jikan.moe/v4";
 
 // Rate limiting: Jikan allows 3 requests/second, 60 requests/minute
+// Be very conservative: aim for 2 requests/second to stay well under limits
 let lastJikanRequest = 0;
-const JIKAN_MIN_DELAY = 350; // ~3 requests/second
+const JIKAN_MIN_DELAY = 500; // 2 requests/second (very conservative)
+let consecutive429s = 0;
+const MAX_BACKOFF_MULTIPLIER = 16; // Max 16x delay (8 seconds between requests)
 
 async function jikanRequest<T>(path: string): Promise<T> {
-  // Rate limiting
+  // Rate limiting with adaptive delay based on 429 errors
   const now = Date.now();
   const timeSinceLastRequest = now - lastJikanRequest;
-  if (timeSinceLastRequest < JIKAN_MIN_DELAY) {
-    await new Promise((resolve) => setTimeout(resolve, JIKAN_MIN_DELAY - timeSinceLastRequest));
+
+  // Increase delay if we've had recent 429s (adaptive backoff)
+  const baseDelay = JIKAN_MIN_DELAY;
+  const backoffMultiplier = consecutive429s > 0 ? Math.min(Math.pow(2, consecutive429s), MAX_BACKOFF_MULTIPLIER) : 1;
+  const totalDelay = baseDelay * backoffMultiplier;
+
+  if (timeSinceLastRequest < totalDelay) {
+    const waitTime = totalDelay - timeSinceLastRequest;
+    if (waitTime > 500 || backoffMultiplier > 1) {
+      console.log(`[RATE LIMIT] Waiting ${waitTime.toFixed(0)}ms before Jikan request (backoff: ${backoffMultiplier}x, consecutive 429s: ${consecutive429s})`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
   }
   lastJikanRequest = Date.now();
 
   const url = `${JIKAN_BASE}${path}`;
-  const rawData = await fetchJson(url);
-  return rawData as T;
+  try {
+    const response = await fetchJsonResponse(url);
+
+    // Check for rate limit headers even on successful requests
+    const retryAfter = getRetryAfterSeconds(response);
+    if (retryAfter !== null && retryAfter > 0) {
+      console.log(`[RATE LIMIT] Jikan API returned Retry-After: ${retryAfter}s`);
+      // Update our rate limiting to respect the header
+      const waitMs = retryAfter * 1000;
+      lastJikanRequest = Date.now() + waitMs; // Set future timestamp to enforce wait
+    }
+
+    // Reset 429 counter on successful request (reset completely to recover quickly)
+    consecutive429s = 0;
+    const rawData = await response.json();
+    return rawData as T;
+  } catch (error) {
+    // Track 429 errors to adapt rate limiting
+    const statusCode = (error as { response?: { status?: number; headers?: Headers } })?.response?.status;
+    const responseHeaders = (error as { response?: { status?: number; headers?: Headers } })?.response?.headers;
+
+    if (statusCode === 429) {
+      consecutive429s++;
+
+      // Check for Retry-After header
+      if (responseHeaders) {
+        const retryAfter = getRetryAfterSeconds(responseHeaders as unknown as Response);
+        if (retryAfter !== null && retryAfter > 0) {
+          const waitMs = retryAfter * 1000;
+          lastJikanRequest = Date.now() + waitMs; // Set future timestamp to enforce wait
+          console.warn(`[RATE LIMIT] Jikan API rate limited. Retry-After: ${retryAfter}s (${waitMs}ms)`);
+        } else {
+          console.warn(`[RATE LIMIT] Jikan API rate limited. Increasing delay multiplier to ${backoffMultiplier * 2}x`);
+        }
+      } else {
+        console.warn(`[RATE LIMIT] Jikan API rate limited. Increasing delay multiplier to ${backoffMultiplier * 2}x`);
+      }
+    } else if (statusCode !== undefined && statusCode < 500) {
+      // Reset on non-rate-limit, non-server errors (client errors)
+      consecutive429s = 0;
+    }
+    // Let ky's retry logic handle the actual retry
+    throw error;
+  }
 }
 
 async function traceToRootSeries(malId: number, originalType: string, announced: { byMalId: Set<number>; byRootMalId: Set<number> }, onIntermediaryFound: (malId: number) => void): Promise<number> {
