@@ -58,12 +58,17 @@ async function jikanRequest<T>(path: string): Promise<T> {
 
       // Check for Retry-After header
       if (responseHeaders) {
-        const retryAfter = getRetryAfterSeconds(responseHeaders as unknown as Response);
-        if (retryAfter !== null && retryAfter > 0) {
-          const waitMs = retryAfter * 1000;
-          lastJikanRequest = Date.now() + waitMs; // Set future timestamp to enforce wait
-          console.warn(`[RATE LIMIT] Jikan API rate limited. Retry-After: ${retryAfter}s (${waitMs}ms)`);
-        } else {
+        try {
+          const retryAfter = getRetryAfterSeconds(responseHeaders);
+          if (retryAfter !== null && retryAfter > 0) {
+            const waitMs = retryAfter * 1000;
+            lastJikanRequest = Date.now() + waitMs; // Set future timestamp to enforce wait
+            console.warn(`[RATE LIMIT] Jikan API rate limited. Retry-After: ${retryAfter}s (${waitMs}ms)`);
+          } else {
+            console.warn(`[RATE LIMIT] Jikan API rate limited. Increasing delay multiplier to ${backoffMultiplier * 2}x`);
+          }
+        } catch (err) {
+          // Headers might not be accessible, fall back to adaptive backoff
           console.warn(`[RATE LIMIT] Jikan API rate limited. Increasing delay multiplier to ${backoffMultiplier * 2}x`);
         }
       } else {

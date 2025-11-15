@@ -28,11 +28,16 @@ export const httpClient = ky.create({
         let delay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000); // Default exponential backoff
         let usedRetryAfter = false;
         if (isRateLimit && responseHeaders) {
-          const retryAfter = getRetryAfterSeconds(responseHeaders as unknown as Response);
-          if (retryAfter !== null && retryAfter > 0) {
-            delay = retryAfter * 1000; // Convert seconds to milliseconds
-            usedRetryAfter = true;
-            console.log(`[RATE LIMIT] Using Retry-After header: ${retryAfter}s (${delay}ms)`);
+          try {
+            const retryAfter = getRetryAfterSeconds(responseHeaders);
+            if (retryAfter !== null && retryAfter > 0) {
+              delay = retryAfter * 1000; // Convert seconds to milliseconds
+              usedRetryAfter = true;
+              console.log(`[RATE LIMIT] Using Retry-After header: ${retryAfter}s (${delay}ms)`);
+            }
+          } catch (err) {
+            // Headers might not be accessible, fall back to exponential backoff
+            console.log(`[RATE LIMIT] Could not read Retry-After header, using exponential backoff`);
           }
         }
 
@@ -73,8 +78,22 @@ export async function fetchJson(url: string, options?: { headers?: Record<string
 }
 
 // Helper to extract Retry-After header value (in seconds)
-export function getRetryAfterSeconds(response: Response): number | null {
-  const retryAfter = response.headers.get("Retry-After");
+// Accepts Response object or Headers object or object with headers property
+export function getRetryAfterSeconds(response: Response | Headers | { headers?: Headers } | null | undefined): number | null {
+  if (!response) return null;
+
+  let headers: Headers | null = null;
+  if (response instanceof Headers) {
+    headers = response;
+  } else if (response instanceof Response) {
+    headers = response.headers;
+  } else if (response && typeof response === "object" && "headers" in response && response.headers instanceof Headers) {
+    headers = response.headers;
+  }
+
+  if (!headers) return null;
+
+  const retryAfter = headers.get("Retry-After");
   if (!retryAfter) return null;
 
   // Retry-After can be either seconds (number) or HTTP date
@@ -95,10 +114,24 @@ export function getRetryAfterSeconds(response: Response): number | null {
 }
 
 // Helper to extract Discord rate limit headers
-export function getDiscordRateLimitInfo(response: Response): { resetAfter?: number; remaining?: number; limit?: number } | null {
-  const resetAfter = response.headers.get("X-RateLimit-Reset-After");
-  const remaining = response.headers.get("X-RateLimit-Remaining");
-  const limit = response.headers.get("X-RateLimit-Limit");
+// Accepts Response object or Headers object or object with headers property
+export function getDiscordRateLimitInfo(response: Response | Headers | { headers?: Headers } | null | undefined): { resetAfter?: number; remaining?: number; limit?: number } | null {
+  if (!response) return null;
+
+  let headers: Headers | null = null;
+  if (response instanceof Headers) {
+    headers = response;
+  } else if (response instanceof Response) {
+    headers = response.headers;
+  } else if (response && typeof response === "object" && "headers" in response && response.headers instanceof Headers) {
+    headers = response.headers;
+  }
+
+  if (!headers) return null;
+
+  const resetAfter = headers.get("X-RateLimit-Reset-After");
+  const remaining = headers.get("X-RateLimit-Remaining");
+  const limit = headers.get("X-RateLimit-Limit");
 
   if (!resetAfter && !remaining && !limit) return null;
 

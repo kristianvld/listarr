@@ -120,9 +120,14 @@ async function sendDiscordWebhook(webhookUrl: string, embed: Record<string, unkn
     const statusCode = (error as { response?: { status?: number } })?.response?.status;
 
     if (statusCode === 429 && responseHeaders) {
-      const rateLimitInfo = getDiscordRateLimitInfo(responseHeaders as unknown as Response);
-      if (rateLimitInfo?.resetAfter) {
-        console.warn(`[RATE LIMIT] Discord webhook rate limited. Reset after: ${rateLimitInfo.resetAfter}s`);
+      try {
+        const rateLimitInfo = getDiscordRateLimitInfo(responseHeaders);
+        if (rateLimitInfo?.resetAfter) {
+          console.warn(`[RATE LIMIT] Discord webhook rate limited. Reset after: ${rateLimitInfo.resetAfter}s`);
+        }
+      } catch (err) {
+        // Headers might not be accessible
+        console.warn(`[RATE LIMIT] Discord webhook rate limited (could not read rate limit headers)`);
       }
     }
 
