@@ -75,6 +75,25 @@ if ! git diff-index --quiet HEAD --; then
     fi
 fi
 
+# Ensure we're on main branch
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$CURRENT_BRANCH" != "main" ]; then
+    echo -e "${RED}Error: Releases can only be created from main branch${NC}"
+    echo -e "${YELLOW}Current branch: $CURRENT_BRANCH${NC}"
+    exit 1
+fi
+
+# Check if current commit is pushed to remote
+git fetch origin --quiet 2>/dev/null || true
+LOCAL_COMMIT=$(git rev-parse HEAD)
+REMOTE_COMMIT=$(git rev-parse origin/main 2>/dev/null || echo "")
+
+if [ -z "$REMOTE_COMMIT" ] || [ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]; then
+    echo -e "${YELLOW}Current commit is not pushed to remote${NC}"
+    echo -e "${GREEN}Pushing main to remote...${NC}"
+    git push origin main
+fi
+
 # Create and push tag
 echo -e "${GREEN}Creating tag: $NEW_TAG${NC}"
 git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
