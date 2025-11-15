@@ -1,6 +1,6 @@
-import type { MediaEntry } from "./types";
 import { fetchHtml, fetchJson } from "../utils";
 import { idLookup } from "../id-lookup";
+import type { MediaEntry } from "./schemas";
 import * as cheerio from "cheerio";
 
 export async function scrapeLetterboxdWatchlist(username: string, announced: { byKey: Set<string> }, onEntryProcessed: (entry: MediaEntry) => Promise<void>): Promise<void> {

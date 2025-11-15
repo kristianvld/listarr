@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const AnnouncedEntrySchema = z.object({
+// Base schema for media entries (runtime type)
+export const MediaEntrySchema = z.object({
   tmdb: z.string().optional(),
   tvdb: z.string().optional(),
   title: z.string(),
@@ -9,11 +10,19 @@ export const AnnouncedEntrySchema = z.object({
   source: z.enum(["letterboxd", "myanimelist"]),
   username: z.string(),
   anime: z.boolean(),
-  timestamp: z.string(),
-  malId: z.number().optional(), // Track MAL ID to prevent reprocessing
-  rootMalId: z.number().optional(), // Track root MAL ID for intermediaries
-  letterboxdSlug: z.string().optional(), // Track Letterboxd slug for deduplication
+  malId: z.number().optional(), // Original MAL ID
+  rootMalId: z.number().optional(), // Root MAL ID (for OVAs/seasons)
+  imageUrl: z.string().optional(), // Image URL for Discord embeds (runtime only)
+  episodes: z.number().optional(), // Number of episodes (runtime only)
+  letterboxdSlug: z.string().optional(), // Letterboxd slug for constructing links
 });
+
+export type MediaEntry = z.infer<typeof MediaEntrySchema>;
+
+// Schema for persisted entries (adds timestamp)
+export const AnnouncedEntrySchema = MediaEntrySchema.extend({
+  timestamp: z.string(),
+}).omit({ imageUrl: true, episodes: true }); // Don't persist runtime-only fields
 
 export type AnnouncedEntry = z.infer<typeof AnnouncedEntrySchema>;
 

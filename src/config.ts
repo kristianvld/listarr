@@ -1,70 +1,53 @@
 import { z } from "zod";
 
-const ConfigSchema = z.object({
-  letterboxd: z.array(z.string()).min(0).optional(),
-  myanimelist: z.array(z.string()).min(0).optional(),
-  discordWebhook: z.string().url().optional().nullable(),
-  port: z.number().int().positive().optional(),
-  refreshInterval: z.number().int().positive().optional(),
-});
-
-export type Config = z.infer<typeof ConfigSchema> & {
-  letterboxd: string[];
-  myanimelist: string[];
-  discordWebhook?: string;
-  port: number;
-  refreshInterval: number;
-};
-
 function parseEnvArray(key: string): string[] | undefined {
   const value = process.env[key];
   if (!value) return undefined;
-  // Support comma-separated or space-separated values
   return value.split(/[,\s]+/).filter((v) => v.trim().length > 0);
 }
 
-export async function loadConfig(): Promise<Config> {
-  // Defaults
-  const defaults = {
-    letterboxd: [] as string[],
-    myanimelist: [] as string[],
-    discordWebhook: undefined as string | undefined,
-    port: 3000,
-    refreshInterval: 300,
-  };
+const ConfigSchema = z.object({
+  letterboxd: z.array(z.string()).default([]),
+  myanimelist: z.array(z.string()).default([]),
+  discordWebhook: z.string().url().nullable().optional(),
+  port: z.number().int().positive().default(3000),
+  refreshInterval: z.number().int().positive().default(300),
+});
 
-  // Load from config.json if it exists
-  let configFileData: Partial<z.infer<typeof ConfigSchema>> = {};
+export type Config = z.infer<typeof ConfigSchema>;
+
+async function loadConfigFile(): Promise<Partial<z.infer<typeof ConfigSchema>>> {
   try {
     const configFile = Bun.file("config.json");
-    if (await configFile.exists()) {
-      const rawConfig = JSON.parse(await configFile.text());
-      configFileData = ConfigSchema.parse(rawConfig);
-    }
+    if (!(await configFile.exists())) return {};
+    const rawConfig = JSON.parse(await configFile.text());
+    return ConfigSchema.partial().parse(rawConfig);
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new Error(`Config validation error: ${error.issues.map((e) => `${e.path.join(".")}: ${e.message}`).join(", ")}`);
     }
     console.warn("[WARNING] Failed to load config.json, using defaults and environment variables only");
+    return {};
   }
+}
 
-  // Load from environment variables (highest priority)
-  const envLetterboxd = parseEnvArray("LETTERBOXD_USERS");
-  const envMyAnimeList = parseEnvArray("MYANIMELIST_USERS");
-  const envDiscordWebhook = process.env.DISCORD_WEBHOOK;
-  const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
-  const envRefreshInterval = process.env.REFRESH_INTERVAL ? parseInt(process.env.REFRESH_INTERVAL, 10) : undefined;
+export async function loadConfig(): Promise<Config> {
+  const configFileData = await loadConfigFile();
 
-  // Merge: env > config > defaults
-  const config: Config = {
-    letterboxd: envLetterboxd ?? configFileData.letterboxd ?? defaults.letterboxd,
-    myanimelist: envMyAnimeList ?? configFileData.myanimelist ?? defaults.myanimelist,
-    discordWebhook: envDiscordWebhook ?? configFileData.discordWebhook ?? defaults.discordWebhook,
-    port: envPort ?? configFileData.port ?? defaults.port,
-    refreshInterval: envRefreshInterval ?? configFileData.refreshInterval ?? defaults.refreshInterval,
+  // Parse environment variables
+  const envData: Partial<z.infer<typeof ConfigSchema>> = {
+    letterboxd: parseEnvArray("LETTERBOXD_USERS"),
+    myanimelist: parseEnvArray("MYANIMELIST_USERS"),
+    discordWebhook: process.env.DISCORD_WEBHOOK || undefined,
+    port: process.env.PORT ? parseInt(process.env.PORT, 10) : undefined,
+    refreshInterval: process.env.REFRESH_INTERVAL ? parseInt(process.env.REFRESH_INTERVAL, 10) : undefined,
   };
 
-  return config;
+  // Merge: env > config file > defaults
+  return ConfigSchema.parse({
+    ...configFileData,
+    ...Object.fromEntries(Object.entries(envData).filter(([, v]) => v !== undefined)),
+  });
 }
 
 export function printConfig(config: Config): void {

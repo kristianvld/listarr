@@ -1,103 +1,89 @@
 import { z } from "zod";
 import { fetchJson } from "./utils";
 
-// Schema for myanimelist_object.json entries
-const MalIdEntrySchema = z
+const BaseIdEntrySchema = z
   .object({
     title: z.string(),
     themoviedb: z.number().nullable().optional(),
     thetvdb: z.number().nullable().optional(),
-    imdb: z.string().nullable().optional(),
-    trakt: z.number().nullable().optional(),
   })
   .loose();
 
-// Schema for letterboxd_object.json entries
-const LetterboxdIdEntrySchema = z
-  .object({
-    title: z.string(),
-    themoviedb: z.number().nullable().optional(),
-    thetvdb: z.number().nullable().optional(),
-    myanimelist: z.number().nullable().optional(),
-    anidb: z.number().nullable().optional(),
-    anilist: z.number().nullable().optional(),
-  })
-  .loose();
+const MalIdEntrySchema = BaseIdEntrySchema.extend({
+  imdb: z.string().nullable().optional(),
+  trakt: z.number().nullable().optional(),
+});
+
+const LetterboxdIdEntrySchema = BaseIdEntrySchema.extend({
+  myanimelist: z.number().nullable().optional(),
+  anidb: z.number().nullable().optional(),
+  anilist: z.number().nullable().optional(),
+});
 
 type IdLookupResult = {
   tmdb?: string;
   tvdb?: string;
-  isAnime?: boolean; // True if entry has MAL/AniDB/AniList ID
+  isAnime?: boolean;
 };
 
 class IdLookupService {
-  private malLookup: Map<number, IdLookupResult> = new Map();
-  private letterboxdLookup: Map<string, IdLookupResult> = new Map();
+  private malLookup = new Map<number, IdLookupResult>();
+  private letterboxdLookup = new Map<string, IdLookupResult>();
   private loaded = false;
   private loadErrors: string[] = [];
+
+  private buildResult(entry: { themoviedb?: number | null; thetvdb?: number | null }): IdLookupResult {
+    const result: IdLookupResult = {};
+    if (entry.themoviedb) result.tmdb = entry.themoviedb.toString();
+    if (entry.thetvdb) result.tvdb = entry.thetvdb.toString();
+    return result;
+  }
+
+  private async loadDatabase<T>(url: string, name: string, schema: z.ZodType<T>, processor: (entries: Record<string, T>) => void): Promise<void> {
+    try {
+      const data = await fetchJson(url);
+      const entries = z.record(z.string(), schema).parse(data);
+      processor(entries);
+    } catch (error) {
+      const errorMsg = `Failed to load ${name} ID lookup database: ${error}`;
+      console.error(errorMsg);
+      this.loadErrors.push(errorMsg);
+    }
+  }
 
   async load(): Promise<void> {
     if (this.loaded) return;
 
     console.log("Loading ID lookup databases...");
 
-    // Load MAL lookup
-    try {
-      const malData = await fetchJson("https://raw.githubusercontent.com/nattadasu/animeApi/refs/heads/v3/database/myanimelist_object.json");
-      const malEntries = z.record(z.string(), MalIdEntrySchema).parse(malData);
+    await Promise.all([
+      this.loadDatabase("https://raw.githubusercontent.com/nattadasu/animeApi/refs/heads/v3/database/myanimelist_object.json", "MAL", MalIdEntrySchema, (entries) => {
+        for (const [malIdStr, entry] of Object.entries(entries)) {
+          const malId = parseInt(malIdStr, 10);
+          if (isNaN(malId)) continue;
 
-      for (const [malIdStr, entry] of Object.entries(malEntries)) {
-        const malId = parseInt(malIdStr, 10);
-        if (isNaN(malId)) continue;
-
-        const result: IdLookupResult = {};
-        if (entry.themoviedb) result.tmdb = entry.themoviedb.toString();
-        if (entry.thetvdb) result.tvdb = entry.thetvdb.toString();
-
-        if (result.tmdb || result.tvdb) {
-          this.malLookup.set(malId, result);
+          const result = this.buildResult(entry);
+          if (result.tmdb || result.tvdb) {
+            this.malLookup.set(malId, result);
+          }
         }
-      }
+        console.log(`Loaded ${this.malLookup.size} MAL ID mappings`);
+      }),
+      this.loadDatabase("https://raw.githubusercontent.com/nattadasu/animeApi/refs/heads/v3/database/letterboxd_object.json", "Letterboxd", LetterboxdIdEntrySchema, (entries) => {
+        for (const [slug, entry] of Object.entries(entries)) {
+          const result = this.buildResult(entry);
+          result.isAnime = !!(entry.myanimelist || entry.anidb || entry.anilist);
 
-      console.log(`Loaded ${this.malLookup.size} MAL ID mappings`);
-    } catch (error) {
-      const errorMsg = `Failed to load MAL ID lookup database: ${error}`;
-      console.error(errorMsg);
-      this.loadErrors.push(errorMsg);
-    }
-
-    // Load Letterboxd lookup
-    try {
-      const letterboxdData = await fetchJson("https://raw.githubusercontent.com/nattadasu/animeApi/refs/heads/v3/database/letterboxd_object.json");
-      const letterboxdEntries = z.record(z.string(), LetterboxdIdEntrySchema).parse(letterboxdData);
-
-      for (const [slug, entry] of Object.entries(letterboxdEntries)) {
-        const result: IdLookupResult = {};
-        if (entry.themoviedb) result.tmdb = entry.themoviedb.toString();
-        if (entry.thetvdb) result.tvdb = entry.thetvdb.toString();
-
-        // Check if it's anime (has MAL, AniDB, or AniList ID)
-        result.isAnime = !!(entry.myanimelist || entry.anidb || entry.anilist);
-
-        if (result.tmdb || result.tvdb || result.isAnime) {
-          this.letterboxdLookup.set(slug, result);
+          if (result.tmdb || result.tvdb || result.isAnime) {
+            this.letterboxdLookup.set(slug, result);
+          }
         }
-      }
-
-      console.log(`Loaded ${this.letterboxdLookup.size} Letterboxd ID mappings`);
-    } catch (error) {
-      const errorMsg = `Failed to load Letterboxd ID lookup database: ${error}`;
-      console.error(errorMsg);
-      this.loadErrors.push(errorMsg);
-    }
+        console.log(`Loaded ${this.letterboxdLookup.size} Letterboxd ID mappings`);
+      }),
+    ]);
 
     this.loaded = true;
-
-    if (this.loadErrors.length > 0) {
-      console.warn(`ID lookup service loaded with ${this.loadErrors.length} error(s)`);
-    } else {
-      console.log("ID lookup service loaded successfully");
-    }
+    console.log(this.loadErrors.length > 0 ? `ID lookup service loaded with ${this.loadErrors.length} error(s)` : "ID lookup service loaded successfully");
   }
 
   getIdsFromMal(malId: number): IdLookupResult | null {
@@ -113,5 +99,4 @@ class IdLookupService {
   }
 }
 
-// Singleton instance
 export const idLookup = new IdLookupService();

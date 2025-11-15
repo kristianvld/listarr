@@ -1,13 +1,14 @@
 import type { Config } from "./config";
-import type { MediaEntry } from "./adapters/types";
 import { scrapeLetterboxdWatchlist } from "./adapters/letterboxd";
 import { scrapeMyAnimeListWatchlist } from "./adapters/myanimelist";
-import { AnnouncedEntrySchema, type AnnouncedEntry } from "./adapters/schemas";
+import { AnnouncedEntrySchema, type AnnouncedEntry, type MediaEntry } from "./adapters/schemas";
 import { httpClient } from "./utils";
 
 // Use data directory if specified via env, otherwise default to current directory (for local development)
 const DATA_DIR = process.env.DATA_DIR || ".";
 const ANNOUNCED_FILE = `${DATA_DIR}/announced.jsonl`;
+
+type AnnouncedSets = { byKey: Set<string>; byMalId: Set<number>; byRootMalId: Set<number> };
 
 let allEntries: MediaEntry[] = [];
 
@@ -15,45 +16,65 @@ export function setAllEntries(entries: MediaEntry[]): void {
   allEntries = entries;
 }
 
-async function loadAnnouncedEntries(): Promise<{ byKey: Set<string>; byMalId: Set<number>; byRootMalId: Set<number> }> {
+// Helper to generate a unique key for an entry
+function getEntryKey(entry: { tmdb?: string; tvdb?: string; title: string; year: number; source: string; username: string }): string {
+  return entry.tmdb ? `tmdb:${entry.tmdb}` : entry.tvdb ? `tvdb:${entry.tvdb}` : `${entry.title}:${entry.year}:${entry.source}:${entry.username}`;
+}
+
+// Helper to convert AnnouncedEntry to MediaEntry (adds runtime-only fields)
+function announcedToMedia(entry: AnnouncedEntry): MediaEntry {
+  return {
+    ...entry,
+    imageUrl: undefined, // Runtime-only, not persisted
+    episodes: undefined, // Runtime-only, not persisted
+  };
+}
+
+// Helper to parse NDJSON file
+async function parseNdjsonFile<T>(filePath: string, parser: (obj: unknown) => T): Promise<T[]> {
   try {
-    const file = Bun.file(ANNOUNCED_FILE);
+    const file = Bun.file(filePath);
     if (!(await file.exists())) {
-      return { byKey: new Set(), byMalId: new Set(), byRootMalId: new Set() };
+      return [];
     }
 
     const content = await file.text();
-    const byKey = new Set<string>();
-    const byMalId = new Set<number>();
-    const byRootMalId = new Set<number>();
+    const results: T[] = [];
 
     for (const line of content.trim().split("\n")) {
       if (!line.trim()) continue;
       try {
-        const rawEntry = JSON.parse(line);
-        const entry = AnnouncedEntrySchema.parse(rawEntry);
-        // Create a unique key for deduplication
-        const key = entry.tmdb ? `tmdb:${entry.tmdb}` : entry.tvdb ? `tvdb:${entry.tvdb}` : `${entry.title}:${entry.year}:${entry.source}:${entry.username}`;
-        byKey.add(key);
-
-        // Also add slug-based key for Letterboxd entries
-        if (entry.source === "letterboxd" && entry.letterboxdSlug) {
-          const slugKey = `letterboxd:${entry.letterboxdSlug}:${entry.year}`;
-          byKey.add(slugKey);
-        }
-
-        if (entry.malId) byMalId.add(entry.malId);
-        if (entry.rootMalId) byRootMalId.add(entry.rootMalId);
+        const parsed = parser(JSON.parse(line));
+        results.push(parsed);
       } catch (error) {
-        console.warn("[ERROR] Failed to parse announced entry:", line, error);
+        console.warn("[ERROR] Failed to parse entry:", line, error);
       }
     }
 
-    return { byKey, byMalId, byRootMalId };
+    return results;
   } catch (error) {
-    console.warn("[ERROR] Failed to load announced entries:", error);
-    return { byKey: new Set(), byMalId: new Set(), byRootMalId: new Set() };
+    console.warn("[ERROR] Failed to load file:", filePath, error);
+    return [];
   }
+}
+
+async function loadAnnouncedEntries(): Promise<AnnouncedSets> {
+  const entries = await parseNdjsonFile(ANNOUNCED_FILE, (obj) => AnnouncedEntrySchema.parse(obj));
+
+  const byKey = new Set<string>();
+  const byMalId = new Set<number>();
+  const byRootMalId = new Set<number>();
+
+  for (const entry of entries) {
+    byKey.add(getEntryKey(entry));
+    if (entry.source === "letterboxd" && entry.letterboxdSlug) {
+      byKey.add(`letterboxd:${entry.letterboxdSlug}:${entry.year}`);
+    }
+    if (entry.malId) byMalId.add(entry.malId);
+    if (entry.rootMalId) byRootMalId.add(entry.rootMalId);
+  }
+
+  return { byKey, byMalId, byRootMalId };
 }
 
 async function appendAnnouncedEntry(entry: MediaEntry): Promise<void> {
@@ -69,27 +90,39 @@ async function appendAnnouncedEntry(entry: MediaEntry): Promise<void> {
   await Bun.write(ANNOUNCED_FILE, existingContent + line);
 }
 
+// Discord webhook constants
+const DISCORD_USERNAME = "Listarr";
+const DISCORD_AVATAR_URL = "https://raw.githubusercontent.com/kristianvld/listarr/refs/heads/main/assets/logo.png";
+
+async function sendDiscordWebhook(webhookUrl: string, embed: Record<string, unknown>): Promise<void> {
+  try {
+    await httpClient.post(webhookUrl, {
+      json: {
+        username: DISCORD_USERNAME,
+        avatar_url: DISCORD_AVATAR_URL,
+        embeds: [embed],
+      },
+    });
+  } catch (error) {
+    console.warn("[ERROR] Failed to send Discord webhook:", error);
+  }
+}
+
 export async function sendDiscordErrorNotification(config: Config, title: string, description: string, error?: unknown): Promise<void> {
   if (!config.discordWebhook) return;
 
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errorStack = error instanceof Error ? error.stack : undefined;
 
-  const embed: {
-    title: string;
-    description: string;
-    color: number;
-    timestamp: string;
-    fields?: Array<{ name: string; value: string; inline: boolean }>;
-  } = {
+  const embed: Record<string, unknown> = {
     title: `⚠️ ${title}`,
-    description: description,
-    color: 0xff0000, // Red for errors
+    description,
+    color: 0xff0000,
     timestamp: new Date().toISOString(),
   };
 
   if (errorMessage) {
-    embed.fields = [
+    const fields: Array<{ name: string; value: string; inline: boolean }> = [
       {
         name: "Error Details",
         value: `\`\`\`${errorMessage.substring(0, 1000)}\`\`\``,
@@ -97,256 +130,126 @@ export async function sendDiscordErrorNotification(config: Config, title: string
       },
     ];
     if (errorStack && errorStack.length > 0) {
-      embed.fields.push({
+      fields.push({
         name: "Stack Trace",
         value: `\`\`\`${errorStack.substring(0, 500)}\`\`\``,
         inline: false,
       });
     }
+    embed.fields = fields;
   }
 
-  const message = {
-    username: "Listarr",
-    avatar_url: "https://raw.githubusercontent.com/kristianvld/listarr/refs/heads/main/assets/logo.png",
-    embeds: [embed],
-  };
-
-  try {
-    await httpClient.post(config.discordWebhook, {
-      json: message,
-    });
-  } catch (err) {
-    // Don't log Discord errors for error notifications to avoid infinite loops
-    console.warn("[ERROR] Failed to send Discord error notification:", err);
-  }
+  await sendDiscordWebhook(config.discordWebhook, embed);
 }
 
-async function sendDiscordNotification(entry: MediaEntry, config: Config, imageUrl?: string): Promise<void> {
+async function sendDiscordNotification(entry: MediaEntry, config: Config): Promise<void> {
   if (!config.discordWebhook) return;
 
-  // Type classification: Movie, Anime Movie, Shows, Anime Shows
-  let typeLabel: string;
-  if (entry.type === "movie") {
-    typeLabel = entry.anime ? "Anime Movie" : "Movie";
-  } else {
-    typeLabel = entry.anime ? "Anime Shows" : "Shows";
-  }
+  const typeLabel = entry.type === "movie" ? (entry.anime ? "Anime Movie" : "Movie") : entry.anime ? "Anime Shows" : "Shows";
 
-  // Source as clickable link to watchlist
-  let sourceLink: string;
-  if (entry.source === "myanimelist") {
-    sourceLink = `[MAL [${entry.username}]](https://myanimelist.net/animelist/${entry.username}?status=6)`;
-  } else {
-    sourceLink = `[Letterboxd [${entry.username}]](https://letterboxd.com/${entry.username}/watchlist/)`;
-  }
+  const sourceLink = entry.source === "myanimelist" ? `[MAL [${entry.username}]](https://myanimelist.net/animelist/${entry.username}?status=6)` : `[Letterboxd [${entry.username}]](https://letterboxd.com/${entry.username}/watchlist/)`;
 
-  // Build fields array
-  const fields: Array<{ name: string; value: string; inline: boolean }> = [];
+  const fields: Array<{ name: string; value: string; inline: boolean }> = [
+    { name: "Type", value: typeLabel, inline: true },
+    { name: "Year", value: String(entry.year), inline: true },
+  ];
 
-  fields.push({
-    name: "Type",
-    value: typeLabel,
-    inline: true,
-  });
-
-  fields.push({
-    name: "Year",
-    value: String(entry.year),
-    inline: true,
-  });
-
-  // Episodes (for TV shows)
   if (entry.type === "tv" && entry.episodes) {
-    fields.push({
-      name: "Episodes",
-      value: String(entry.episodes),
-      inline: true,
-    });
+    fields.push({ name: "Episodes", value: String(entry.episodes), inline: true });
   }
 
-  fields.push({
-    name: "Source",
-    value: sourceLink,
-    inline: false,
-  });
+  fields.push({ name: "Source", value: sourceLink, inline: false });
 
-  // Add ID links
+  // Build ID links
   const idLinks: string[] = [];
-
-  // Add Letterboxd link for Letterboxd entries
   if (entry.source === "letterboxd" && entry.letterboxdSlug) {
     idLinks.push(`[Letterboxd](https://letterboxd.com/film/${entry.letterboxdSlug}/)`);
   }
-
   if (entry.malId || entry.rootMalId) {
     const malId = entry.rootMalId || entry.malId;
-    if (malId) {
-      idLinks.push(`[MAL](https://myanimelist.net/anime/${malId})`);
-    }
+    if (malId) idLinks.push(`[MAL](https://myanimelist.net/anime/${malId})`);
   }
-
   if (entry.tvdb) {
     const tvdbType = entry.type === "tv" ? "series" : "movies";
     idLinks.push(`[TVDB](https://www.thetvdb.com/${tvdbType}/${entry.tvdb})`);
   }
-
   if (entry.tmdb) {
     const tmdbType = entry.type === "movie" ? "movie" : "tv";
     idLinks.push(`[TMDB](https://www.themoviedb.org/${tmdbType}/${entry.tmdb})`);
   }
-
   if (idLinks.length > 0) {
-    fields.push({
-      name: "Links",
-      value: idLinks.join(" - "),
-      inline: false,
-    });
+    fields.push({ name: "Links", value: idLinks.join(" - "), inline: false });
   }
 
-  const embed: {
-    title: string;
-    color: number;
-    timestamp: string;
-    fields: Array<{ name: string; value: string; inline: boolean }>;
-    image?: { url: string };
-  } = {
+  const embed: Record<string, unknown> = {
     title: entry.title,
-    color: entry.anime ? 0x2e51a2 : 0x00e054, // MAL blue for anime, Letterboxd green for movies
+    color: entry.anime ? 0x2e51a2 : 0x00e054,
     timestamp: new Date().toISOString(),
-    fields: fields,
+    fields,
   };
 
-  // Add image if available (from entry.imageUrl or passed parameter)
-  const finalImageUrl = imageUrl || entry.imageUrl;
-  if (finalImageUrl) {
-    embed.image = { url: finalImageUrl };
-    console.log(`Adding image to Discord embed: ${finalImageUrl}`);
+  const imageUrl = entry.imageUrl;
+  if (imageUrl) {
+    embed.image = { url: imageUrl };
+    console.log(`Adding image to Discord embed: ${imageUrl}`);
   } else {
     console.warn(`No image URL for entry: ${entry.title} (source: ${entry.source})`);
   }
 
-  const message = {
-    username: "Listarr",
-    avatar_url: "https://raw.githubusercontent.com/kristianvld/listarr/refs/heads/main/assets/logo.png",
-    embeds: [embed],
-  };
-
-  try {
-    await httpClient.post(config.discordWebhook, {
-      json: message,
-    });
-  } catch (error) {
-    console.warn("[ERROR] Failed to send Discord notification:", error);
-  }
+  await sendDiscordWebhook(config.discordWebhook, embed);
 }
 
 export async function loadAllEntries(): Promise<MediaEntry[]> {
-  try {
-    const file = Bun.file(ANNOUNCED_FILE);
-    if (!(await file.exists())) {
-      return [];
+  const entries = await parseNdjsonFile(ANNOUNCED_FILE, (obj) => AnnouncedEntrySchema.parse(obj));
+  return entries.map(announcedToMedia).filter((e) => !e.title.startsWith("[Intermediary:"));
+}
+
+// Helper to process a single entry (save, notify, track)
+async function processEntry(entry: MediaEntry, config: Config, announced: AnnouncedSets): Promise<void> {
+  await appendAnnouncedEntry(entry);
+  await sendDiscordNotification(entry, config);
+
+  // Update announced sets for deduplication
+  announced.byKey.add(getEntryKey(entry));
+  if (entry.malId) announced.byMalId.add(entry.malId);
+  if (entry.rootMalId) announced.byRootMalId.add(entry.rootMalId);
+}
+
+// Helper to scrape a source with error handling
+async function scrapeSource(sourceName: string, usernames: string[], announced: AnnouncedSets, scraper: (username: string, announced: AnnouncedSets, onEntry: (entry: MediaEntry) => Promise<void>) => Promise<void>, config: Config, onEntryProcessed: (entry: MediaEntry) => Promise<void>): Promise<MediaEntry[]> {
+  const entries: MediaEntry[] = [];
+
+  for (const username of usernames) {
+    try {
+      console.log(`Starting ${sourceName} scrape for ${username}...`);
+      await scraper(username, announced, async (entry) => {
+        await processEntry(entry, config, announced);
+        await onEntryProcessed(entry);
+        entries.push(entry);
+      });
+      console.log(`✓ Completed ${sourceName} scrape for ${username}`);
+    } catch (error) {
+      console.error(`[ERROR] Failed to scrape ${sourceName} for ${username}:`, error);
+      await sendDiscordErrorNotification(config, `Failed to Scrape ${sourceName}`, `Failed to scrape ${sourceName} watchlist for user **${username}**`, error);
     }
-
-    const content = await file.text();
-    const entries: MediaEntry[] = [];
-
-    for (const line of content.trim().split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const rawEntry = JSON.parse(line);
-        const entry = AnnouncedEntrySchema.parse(rawEntry);
-
-        // Convert AnnouncedEntry to MediaEntry
-        const mediaEntry: MediaEntry = {
-          tmdb: entry.tmdb,
-          tvdb: entry.tvdb,
-          title: entry.title,
-          year: entry.year,
-          type: entry.type,
-          source: entry.source,
-          username: entry.username,
-          anime: entry.anime,
-          malId: entry.malId,
-          rootMalId: entry.rootMalId,
-          letterboxdSlug: entry.letterboxdSlug,
-        };
-
-        // Skip intermediary entries
-        if (!mediaEntry.title.startsWith("[Intermediary:")) {
-          entries.push(mediaEntry);
-        }
-      } catch (error) {
-        console.warn("[ERROR] Failed to parse announced entry:", line, error);
-      }
-    }
-
-    return entries;
-  } catch (error) {
-    console.warn("[ERROR] Failed to load all entries:", error);
-    return [];
   }
+
+  return entries;
 }
 
 export async function refreshData(config: Config): Promise<void> {
   console.log("Refreshing data...");
-  const entries: MediaEntry[] = [];
   const announced = await loadAnnouncedEntries();
 
-  // Scrape Letterboxd - processes entries incrementally
-  for (const username of config.letterboxd) {
-    try {
-      console.log(`Starting Letterboxd scrape for ${username}...`);
-      await scrapeLetterboxdWatchlist(username, announced, async (entry: MediaEntry) => {
-        // Add to announced.jsonl immediately
-        await appendAnnouncedEntry(entry);
-        // Send Discord notification
-        await sendDiscordNotification(entry, config);
-        // Add to in-memory list
-        entries.push(entry);
-      });
-      console.log(`✓ Completed Letterboxd scrape for ${username}`);
-    } catch (error) {
-      console.error(`[ERROR] Failed to scrape Letterboxd for ${username}:`, error);
-      await sendDiscordErrorNotification(config, "Failed to Scrape Letterboxd", `Failed to scrape Letterboxd watchlist for user **${username}**`, error);
-      // Continue with next username even if this one fails
-    }
-  }
-
-  // Scrape MyAnimeList - processes entries incrementally
-  for (const username of config.myanimelist) {
-    try {
-      console.log(`Starting MyAnimeList scrape for ${username}...`);
-      await scrapeMyAnimeListWatchlist(username, announced, async (entry: MediaEntry) => {
-        // Add to announced.jsonl immediately
-        await appendAnnouncedEntry(entry);
-        // Send Discord notification
-        await sendDiscordNotification(entry, config);
-        // Add to in-memory list
-        entries.push(entry);
-        // Update announced sets
-        const key = entry.tmdb ? `tmdb:${entry.tmdb}` : entry.tvdb ? `tvdb:${entry.tvdb}` : `${entry.title}:${entry.year}:${entry.source}:${entry.username}`;
-        announced.byKey.add(key);
-        if (entry.malId) announced.byMalId.add(entry.malId);
-        if (entry.rootMalId) announced.byRootMalId.add(entry.rootMalId);
-      });
-      console.log(`✓ Completed MyAnimeList scrape for ${username}`);
-    } catch (error) {
-      console.error(`[ERROR] Failed to scrape MyAnimeList for ${username}:`, error);
-      await sendDiscordErrorNotification(config, "Failed to Scrape MyAnimeList", `Failed to scrape MyAnimeList watchlist for user **${username}**`, error);
-      // Continue with next username even if this one fails
-    }
-  }
+  // Scrape both sources
+  const [letterboxdEntries, malEntries] = await Promise.all([scrapeSource("Letterboxd", config.letterboxd, announced, scrapeLetterboxdWatchlist, config, async () => {}), scrapeSource("MyAnimeList", config.myanimelist, announced, scrapeMyAnimeListWatchlist, config, async () => {})]);
 
   // Merge new entries with existing entries (avoid duplicates)
-  const existingKeys = new Set(
-    allEntries.map((e) => {
-      const key = e.tmdb ? `tmdb:${e.tmdb}` : e.tvdb ? `tvdb:${e.tvdb}` : `${e.title}:${e.year}:${e.source}:${e.username}`;
-      return key;
-    })
-  );
+  const newEntries = [...letterboxdEntries, ...malEntries];
+  const existingKeys = new Set(allEntries.map(getEntryKey));
 
-  for (const entry of entries) {
-    const key = entry.tmdb ? `tmdb:${entry.tmdb}` : entry.tvdb ? `tvdb:${entry.tvdb}` : `${entry.title}:${entry.year}:${entry.source}:${entry.username}`;
+  for (const entry of newEntries) {
+    const key = getEntryKey(entry);
     if (!existingKeys.has(key)) {
       allEntries.push(entry);
       existingKeys.add(key);
@@ -357,20 +260,15 @@ export async function refreshData(config: Config): Promise<void> {
 }
 
 function formatListEntry(entry: MediaEntry): Record<string, unknown> {
-  const result: Record<string, unknown> = {
-    title: entry.title,
-    year: entry.year,
-  };
-
-  if (entry.tmdb) {
-    result.tmdbId = entry.tmdb;
-  }
-
-  if (entry.tvdb) {
-    result.tvdbId = entry.tvdb;
-  }
-
+  const result: Record<string, unknown> = { title: entry.title, year: entry.year };
+  if (entry.tmdb) result.tmdbId = entry.tmdb;
+  if (entry.tvdb) result.tvdbId = entry.tvdb;
   return result;
+}
+
+// Helper to filter entries for endpoints
+function filterEntries(type: "movie" | "tv", anime: boolean, requireId: "tmdb" | "tvdb"): MediaEntry[] {
+  return allEntries.filter((e) => e.type === type && e.anime === anime && e[requireId] !== undefined && !e.title.startsWith("[Intermediary:"));
 }
 
 export function createServer(config: Config) {
@@ -378,33 +276,28 @@ export function createServer(config: Config) {
     port: config.port,
     async fetch(req) {
       const url = new URL(req.url);
+      const pathname = url.pathname;
 
       // Radarr endpoints
-      if (url.pathname === "/radarr/anime") {
-        const animeMovies = allEntries.filter((e) => e.type === "movie" && e.anime && e.tmdb && !e.title.startsWith("[Intermediary:"));
-        return new Response(JSON.stringify(animeMovies.map(formatListEntry)), {
+      if (pathname === "/radarr/anime") {
+        return new Response(JSON.stringify(filterEntries("movie", true, "tmdb").map(formatListEntry)), {
           headers: { "Content-Type": "application/json" },
         });
       }
-
-      if (url.pathname === "/radarr/movies") {
-        const nonAnimeMovies = allEntries.filter((e) => e.type === "movie" && !e.anime && e.tmdb && !e.title.startsWith("[Intermediary:"));
-        return new Response(JSON.stringify(nonAnimeMovies.map(formatListEntry)), {
+      if (pathname === "/radarr/movies") {
+        return new Response(JSON.stringify(filterEntries("movie", false, "tmdb").map(formatListEntry)), {
           headers: { "Content-Type": "application/json" },
         });
       }
 
       // Sonarr endpoints
-      if (url.pathname === "/sonarr/anime") {
-        const animeShows = allEntries.filter((e) => e.type === "tv" && e.anime && e.tvdb && !e.title.startsWith("[Intermediary:"));
-        return new Response(JSON.stringify(animeShows.map(formatListEntry)), {
+      if (pathname === "/sonarr/anime") {
+        return new Response(JSON.stringify(filterEntries("tv", true, "tvdb").map(formatListEntry)), {
           headers: { "Content-Type": "application/json" },
         });
       }
-
-      if (url.pathname === "/sonarr/shows") {
-        const nonAnimeShows = allEntries.filter((e) => e.type === "tv" && !e.anime && e.tvdb && !e.title.startsWith("[Intermediary:"));
-        return new Response(JSON.stringify(nonAnimeShows.map(formatListEntry)), {
+      if (pathname === "/sonarr/shows") {
+        return new Response(JSON.stringify(filterEntries("tv", false, "tvdb").map(formatListEntry)), {
           headers: { "Content-Type": "application/json" },
         });
       }

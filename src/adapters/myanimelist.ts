@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { MediaEntry } from "./types";
 import { fetchJson } from "../utils";
-import { MyAnimeListEntrySchema, AnnouncedEntrySchema, type MyAnimeListEntry, JikanAnimeSchema } from "./schemas";
+import { MyAnimeListEntrySchema, AnnouncedEntrySchema, JikanAnimeSchema, type MediaEntry } from "./schemas";
 import { idLookup } from "../id-lookup";
 
 const JIKAN_BASE = "https://api.jikan.moe/v4";
