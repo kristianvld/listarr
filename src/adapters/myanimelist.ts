@@ -24,9 +24,10 @@ async function jikanRequest<T>(path: string): Promise<T> {
   return rawData as T;
 }
 
-async function traceToRootSeries(malId: number, announced: { byMalId: Set<number>; byRootMalId: Set<number> }, onIntermediaryFound: (malId: number) => void): Promise<number> {
+async function traceToRootSeries(malId: number, originalType: string, announced: { byMalId: Set<number>; byRootMalId: Set<number> }, onIntermediaryFound: (malId: number) => void): Promise<number> {
   const visited = new Set<number>();
   let currentId = malId;
+  const isOriginalMovie = originalType === "Movie";
 
   while (true) {
     if (visited.has(currentId)) {
@@ -39,8 +40,54 @@ async function traceToRootSeries(malId: number, announced: { byMalId: Set<number
       const relationsData = await jikanRequest<{ data: Array<{ relation: string; entry: Array<{ mal_id: number; type: string }> }> }>(`/anime/${currentId}/relations`);
       const relations = relationsData.data;
 
-      // Look for Parent Story, Prequel, or Full Story (which points to the main series)
-      const parentRelation = relations.find((r) => r.relation === "Parent Story" || r.relation === "Prequel" || r.relation === "Full Story");
+      // For movies, we only trace to TV series if they're part of a TV series.
+      // We check for: Parent Story (points to TV), Sequel (points to TV), or Prequel (from TV).
+      if (isOriginalMovie && currentId === malId) {
+        // Check if this movie has a Parent Story pointing to a TV series
+        const parentStoryRelation = relations.find((r) => r.relation === "Parent Story");
+        let hasTVParentStory = false;
+        if (parentStoryRelation && parentStoryRelation.entry.length > 0 && parentStoryRelation.entry[0]) {
+          const parentId = parentStoryRelation.entry[0].mal_id;
+          const parentAnime = await jikanRequest<{ data: { type: string; episodes: number | null } }>(`/anime/${parentId}`);
+          if (parentAnime.data.type === "TV" && parentAnime.data.episodes && parentAnime.data.episodes > 1) {
+            hasTVParentStory = true;
+          }
+        }
+
+        // Check if this movie has a Sequel pointing to a TV series
+        const sequelRelation = relations.find((r) => r.relation === "Sequel");
+        let hasTVSequel = false;
+        if (sequelRelation && sequelRelation.entry.length > 0 && sequelRelation.entry[0]) {
+          const sequelId = sequelRelation.entry[0].mal_id;
+          const sequelAnime = await jikanRequest<{ data: { type: string; episodes: number | null } }>(`/anime/${sequelId}`);
+          if (sequelAnime.data.type === "TV" && sequelAnime.data.episodes && sequelAnime.data.episodes > 1) {
+            hasTVSequel = true;
+          }
+        }
+
+        // Check if this movie has a Prequel from a TV series
+        const prequelRelation = relations.find((r) => r.relation === "Prequel");
+        let hasTVPrequel = false;
+        if (prequelRelation && prequelRelation.entry.length > 0 && prequelRelation.entry[0]) {
+          const prequelId = prequelRelation.entry[0].mal_id;
+          const prequelAnime = await jikanRequest<{ data: { type: string; episodes: number | null } }>(`/anime/${prequelId}`);
+          if (prequelAnime.data.type === "TV" && prequelAnime.data.episodes && prequelAnime.data.episodes > 1) {
+            hasTVPrequel = true;
+          }
+        }
+
+        // Only trace if movie is part of a TV series (has Parent Story, Sequel to TV, or Prequel from TV)
+        // Otherwise, it's a standalone movie or movie trilogy, don't trace
+        if (!hasTVParentStory && !hasTVSequel && !hasTVPrequel) {
+          return currentId;
+        }
+      }
+
+      // Look for Parent Story, Prequel, Sequel, or Full Story (which points to the main series)
+      // For movies that are part of a series, Sequel can point to the TV series
+      const parentRelation = relations.find(
+        (r) => r.relation === "Parent Story" || r.relation === "Prequel" || r.relation === "Full Story" || (isOriginalMovie && r.relation === "Sequel") // Only use Sequel for movies
+      );
 
       if (!parentRelation || parentRelation.entry.length === 0) {
         // No parent found, this is the root
@@ -67,8 +114,8 @@ async function traceToRootSeries(malId: number, announced: { byMalId: Set<number
 
       const parentAnime = await jikanRequest<{ data: { type: string; episodes: number | null } }>(`/anime/${parentId}`);
 
-      // If parent is TV series with multiple episodes, continue tracing
-      // Otherwise, this might be the root (could be a movie series)
+      // If parent is TV series with multiple episodes, continue tracing to it
+      // This handles movies that are part of a TV series (e.g., Re:Zero Memory Snow)
       if (parentAnime.data.type === "TV" && parentAnime.data.episodes && parentAnime.data.episodes > 1) {
         currentId = parentId;
         continue;
@@ -114,40 +161,30 @@ export async function scrapeMyAnimeListWatchlist(username: string, announced: { 
         const animeData = await jikanRequest<{ data: z.infer<typeof JikanAnimeSchema> }>(`/anime/${malEntry.anime_id}`);
         const anime = JikanAnimeSchema.parse(animeData.data);
 
-        // Determine if this is a movie or TV show
-        const isMovie = anime.type === "Movie";
-
-        // Trace to root series if it's TV/OVA/Special
+        // Trace to root series for all types (including movies that are part of a series)
         let rootMalId = malEntry.anime_id;
         let rootAnime = anime;
         const intermediaries: number[] = [];
 
-        if (!isMovie) {
-          rootMalId = await traceToRootSeries(malEntry.anime_id, announced, (malId) => {
-            intermediaries.push(malId);
-          });
+        // Try to trace to parent TV series (movies only trace if sandwiched between TV series)
+        rootMalId = await traceToRootSeries(malEntry.anime_id, anime.type, announced, (malId) => {
+          intermediaries.push(malId);
+        });
 
-          // Check if root is already processed
-          if (announced.byRootMalId.has(rootMalId)) {
-            // Mark this entry and intermediaries as processed
-            announced.byMalId.add(malEntry.anime_id);
-            for (const interId of intermediaries) {
-              announced.byMalId.add(interId);
-            }
-            continue;
+        // Check if root is already processed
+        if (announced.byRootMalId.has(rootMalId)) {
+          // Mark this entry and intermediaries as processed
+          announced.byMalId.add(malEntry.anime_id);
+          for (const interId of intermediaries) {
+            announced.byMalId.add(interId);
           }
+          continue;
+        }
 
-          // Get root anime details
-          if (rootMalId !== malEntry.anime_id) {
-            const rootData = await jikanRequest<{ data: z.infer<typeof JikanAnimeSchema> }>(`/anime/${rootMalId}`);
-            rootAnime = JikanAnimeSchema.parse(rootData.data);
-          }
-        } else {
-          // For movies, check if already processed
-          if (announced.byRootMalId.has(rootMalId)) {
-            announced.byMalId.add(malEntry.anime_id);
-            continue;
-          }
+        // Get root anime details if different from original
+        if (rootMalId !== malEntry.anime_id) {
+          const rootData = await jikanRequest<{ data: z.infer<typeof JikanAnimeSchema> }>(`/anime/${rootMalId}`);
+          rootAnime = JikanAnimeSchema.parse(rootData.data);
         }
 
         // Extract year from aired date
@@ -192,7 +229,11 @@ export async function scrapeMyAnimeListWatchlist(username: string, announced: { 
         }
 
         // Determine type based on root anime
-        const mediaType = rootAnime.type === "Movie" ? "movie" : "tv";
+        // If we traced to a TV series, it's a TV show (even if original was a movie/OVA)
+        // Otherwise, standalone movies and single-episode OVAs/Specials are movies
+        const tracedToTV = rootMalId !== malEntry.anime_id && rootAnime.type === "TV";
+        const isRootMovie = !tracedToTV && (rootAnime.type === "Movie" || (rootAnime.episodes === 1 && rootAnime.type !== "TV"));
+        const mediaType = isRootMovie ? "movie" : "tv";
 
         // Get image URL from Jikan
         const imageUrl = rootAnime.images?.jpg?.large_image_url || rootAnime.images?.jpg?.image_url || rootAnime.images?.webp?.large_image_url || rootAnime.images?.webp?.image_url || undefined;

@@ -18,9 +18,16 @@ export const httpClient = ky.create({
   },
   hooks: {
     beforeRetry: [
-      async ({ error, retryCount }) => {
+      async ({ error, retryCount, request }) => {
         // Exponential backoff: 1s, 2s, 4s
         const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000);
+        const url = request.url;
+        console.log(`[RETRY] Retry attempt ${retryCount} for ${url} after ${delay}ms delay`);
+        if (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          const statusCode = (error as { response?: { status?: number } })?.response?.status;
+          console.log(`[RETRY] Error: ${errorMsg}${statusCode ? ` (HTTP ${statusCode})` : ""}`);
+        }
         await new Promise((resolve) => setTimeout(resolve, delay));
       },
     ],

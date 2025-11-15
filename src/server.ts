@@ -5,7 +5,7 @@ import { scrapeMyAnimeListWatchlist } from "./adapters/myanimelist";
 import { AnnouncedEntrySchema, type AnnouncedEntry } from "./adapters/schemas";
 import { httpClient } from "./utils";
 
-// Use data directory if specified via env, otherwise current directory
+// Use data directory if specified via env, otherwise default to current directory (for local development)
 const DATA_DIR = process.env.DATA_DIR || ".";
 const ANNOUNCED_FILE = `${DATA_DIR}/announced.jsonl`;
 
@@ -65,6 +65,7 @@ async function appendAnnouncedEntry(entry: MediaEntry): Promise<void> {
   const line = JSON.stringify(announcedEntry) + "\n";
   const file = Bun.file(ANNOUNCED_FILE);
   const existingContent = (await file.exists()) ? await file.text() : "";
+  // Bun.write() automatically creates parent directories if they don't exist
   await Bun.write(ANNOUNCED_FILE, existingContent + line);
 }
 
