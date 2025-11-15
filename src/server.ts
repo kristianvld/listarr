@@ -294,6 +294,7 @@ export async function refreshData(config: Config): Promise<void> {
   // Scrape Letterboxd - processes entries incrementally
   for (const username of config.letterboxd) {
     try {
+      console.log(`Starting Letterboxd scrape for ${username}...`);
       await scrapeLetterboxdWatchlist(username, announced, async (entry: MediaEntry) => {
         // Add to announced.jsonl immediately
         await appendAnnouncedEntry(entry);
@@ -302,17 +303,19 @@ export async function refreshData(config: Config): Promise<void> {
         // Add to in-memory list
         entries.push(entry);
       });
-      console.log(`Processed Letterboxd (${username})`);
+      console.log(`✓ Completed Letterboxd scrape for ${username}`);
     } catch (error) {
       console.error(`[ERROR] Failed to scrape Letterboxd for ${username}:`, error);
       await sendDiscordErrorNotification(config, "Failed to Scrape Letterboxd", `Failed to scrape Letterboxd watchlist for user **${username}**`, error);
+      // Continue with next username even if this one fails
     }
   }
 
   // Scrape MyAnimeList - processes entries incrementally
   for (const username of config.myanimelist) {
     try {
-      const malEntries = await scrapeMyAnimeListWatchlist(username, announced, async (entry: MediaEntry) => {
+      console.log(`Starting MyAnimeList scrape for ${username}...`);
+      await scrapeMyAnimeListWatchlist(username, announced, async (entry: MediaEntry) => {
         // Add to announced.jsonl immediately
         await appendAnnouncedEntry(entry);
         // Send Discord notification
@@ -325,10 +328,11 @@ export async function refreshData(config: Config): Promise<void> {
         if (entry.malId) announced.byMalId.add(entry.malId);
         if (entry.rootMalId) announced.byRootMalId.add(entry.rootMalId);
       });
-      console.log(`Processed MyAnimeList (${username})`);
+      console.log(`✓ Completed MyAnimeList scrape for ${username}`);
     } catch (error) {
       console.error(`[ERROR] Failed to scrape MyAnimeList for ${username}:`, error);
       await sendDiscordErrorNotification(config, "Failed to Scrape MyAnimeList", `Failed to scrape MyAnimeList watchlist for user **${username}**`, error);
+      // Continue with next username even if this one fails
     }
   }
 

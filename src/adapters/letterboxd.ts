@@ -177,10 +177,14 @@ export async function scrapeLetterboxdWatchlist(username: string, announced: { b
 
     // Check for next page
     const nextPageLink = $("div.pagination a.next").attr("href");
-    if (nextPageLink && pageFilmCount > 0) {
+    if (nextPageLink) {
       currentPage++;
+      console.log(`Moving to page ${currentPage} for ${username}`);
     } else {
       hasMorePages = false;
+      console.log(`No more pages for ${username}. Processed ${pageFilmCount} films on final page.`);
     }
   }
+
+  console.log(`Finished processing Letterboxd watchlist for ${username}`);
 }
