@@ -10,6 +10,9 @@ const ANNOUNCED_FILE = `${DATA_DIR}/announced.jsonl`;
 
 type AnnouncedSets = { byKey: Set<string>; byMalId: Set<number>; byRootMalId: Set<number> };
 
+// Track which sources/users are currently failing (in-memory only, reset on restart)
+const failingScrapes = new Map<string, boolean>(); // Key: "source:username", Value: true if currently failing
+
 let allEntries: MediaEntry[] = [];
 
 export function setAllEntries(entries: MediaEntry[]): void {
@@ -169,6 +172,19 @@ export async function sendDiscordErrorNotification(config: Config, title: string
   await sendDiscordWebhook(config.discordWebhook, embed);
 }
 
+async function sendDiscordRecoveryNotification(config: Config, sourceName: string, username: string): Promise<void> {
+  if (!config.discordWebhook) return;
+
+  const embed: Record<string, unknown> = {
+    title: `✅ ${sourceName} Scraping Recovered`,
+    description: `Successfully scraped ${sourceName} watchlist for user **${username}** after previous failures.`,
+    color: 0x00ff00, // Green for recovery
+    timestamp: new Date().toISOString(),
+  };
+
+  await sendDiscordWebhook(config.discordWebhook, embed);
+}
+
 async function sendDiscordNotification(entry: MediaEntry, config: Config): Promise<void> {
   if (!config.discordWebhook) return;
 
@@ -247,6 +263,9 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
   const entries: MediaEntry[] = [];
 
   for (const username of usernames) {
+    const scrapeKey = `${sourceName.toLowerCase()}:${username}`;
+    const wasFailing = failingScrapes.get(scrapeKey) === true;
+
     try {
       console.log(`Starting ${sourceName} scrape for ${username}...`);
       await scraper(username, announced, async (entry) => {
@@ -255,9 +274,20 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
         entries.push(entry);
       });
       console.log(`✓ Completed ${sourceName} scrape for ${username}`);
+
+      // If this scrape was previously failing, notify that it's working again
+      if (wasFailing) {
+        failingScrapes.delete(scrapeKey);
+        await sendDiscordRecoveryNotification(config, sourceName, username);
+      } else {
+        // Ensure it's marked as not failing
+        failingScrapes.delete(scrapeKey);
+      }
     } catch (error) {
       console.error(`[ERROR] Failed to scrape ${sourceName} for ${username}:`, error);
+      failingScrapes.set(scrapeKey, true);
       await sendDiscordErrorNotification(config, `Failed to Scrape ${sourceName}`, `Failed to scrape ${sourceName} watchlist for user **${username}**`, error);
+      // Continue with next username even if this one fails
     }
   }
 
