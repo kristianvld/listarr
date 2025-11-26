@@ -286,7 +286,18 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
     } catch (error) {
       console.error(`[ERROR] Failed to scrape ${sourceName} for ${username}:`, error);
       failingScrapes.set(scrapeKey, true);
-      await sendDiscordErrorNotification(config, `Failed to Scrape ${sourceName}`, `Failed to scrape ${sourceName} watchlist for user **${username}**`, error);
+
+      // Only send the failure notification the first time we detect the issue.
+      if (!wasFailing) {
+        await sendDiscordErrorNotification(
+          config,
+          `Failed to Scrape ${sourceName}`,
+          `Failed to scrape ${sourceName} watchlist for user **${username}**`,
+          error,
+        );
+      } else {
+        console.log(`[WARN] Suppressing duplicate ${sourceName} failure notification for ${username}`);
+      }
       // Continue with next username even if this one fails
     }
   }
