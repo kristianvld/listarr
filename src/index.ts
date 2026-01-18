@@ -21,10 +21,14 @@ async function main() {
   // Load all existing entries from announced.jsonl
   const existingEntries = await loadAllEntries();
   setAllEntries(existingEntries);
+  const hasExistingEntries = existingEntries.length > 0;
   console.log(`Loaded ${existingEntries.length} existing entries from announced.jsonl`);
+  if (!hasExistingEntries) {
+    console.log("[INFO] No existing entries found. Seeding announced list without Discord notifications.");
+  }
 
   // Initial data refresh
-  await refreshData(config);
+  await refreshData(config, { notify: hasExistingEntries });
 
   // Start HTTP server
   createServer(config);

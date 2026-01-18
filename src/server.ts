@@ -247,10 +247,12 @@ export async function loadAllEntries(): Promise<MediaEntry[]> {
   return entries.map(announcedToMedia).filter((e) => !e.title.startsWith("[Intermediary:"));
 }
 
-// Helper to process a single entry (save, notify, track)
-async function processEntry(entry: MediaEntry, config: Config, announced: AnnouncedSets): Promise<void> {
+// Helper to process a single entry (save, optionally notify, track)
+async function processEntry(entry: MediaEntry, config: Config, announced: AnnouncedSets, notify: boolean): Promise<void> {
   await appendAnnouncedEntry(entry);
-  await sendDiscordNotification(entry, config);
+  if (notify) {
+    await sendDiscordNotification(entry, config);
+  }
 
   // Update announced sets for deduplication
   announced.byKey.add(getEntryKey(entry));
@@ -259,7 +261,15 @@ async function processEntry(entry: MediaEntry, config: Config, announced: Announ
 }
 
 // Helper to scrape a source with error handling
-async function scrapeSource(sourceName: string, usernames: string[], announced: AnnouncedSets, scraper: (username: string, announced: AnnouncedSets, onEntry: (entry: MediaEntry) => Promise<void>) => Promise<void>, config: Config, onEntryProcessed: (entry: MediaEntry) => Promise<void>): Promise<MediaEntry[]> {
+async function scrapeSource(
+  sourceName: string,
+  usernames: string[],
+  announced: AnnouncedSets,
+  scraper: (username: string, announced: AnnouncedSets, onEntry: (entry: MediaEntry) => Promise<void>) => Promise<void>,
+  config: Config,
+  onEntryProcessed: (entry: MediaEntry) => Promise<void>,
+  notify: boolean,
+): Promise<MediaEntry[]> {
   const entries: MediaEntry[] = [];
 
   for (const username of usernames) {
@@ -269,7 +279,7 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
     try {
       console.log(`Starting ${sourceName} scrape for ${username}...`);
       await scraper(username, announced, async (entry) => {
-        await processEntry(entry, config, announced);
+        await processEntry(entry, config, announced, notify);
         await onEntryProcessed(entry);
         entries.push(entry);
       });
@@ -305,14 +315,18 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
   return entries;
 }
 
-export async function refreshData(config: Config): Promise<void> {
+export async function refreshData(config: Config, options?: { notify?: boolean }): Promise<void> {
   console.log("Refreshing data...");
+  const notify = options?.notify ?? true;
+  if (!notify) {
+    console.log("[INFO] Suppressing Discord notifications for this refresh (initial sync).");
+  }
   const announced = await loadAnnouncedEntries();
 
   // Scrape sources sequentially to avoid overwhelming APIs (especially Jikan)
   // This prevents both scrapers from competing for rate limits
-  const letterboxdEntries = await scrapeSource("Letterboxd", config.letterboxd, announced, scrapeLetterboxdWatchlist, config, async () => {});
-  const malEntries = await scrapeSource("MyAnimeList", config.myanimelist, announced, scrapeMyAnimeListWatchlist, config, async () => {});
+  const letterboxdEntries = await scrapeSource("Letterboxd", config.letterboxd, announced, scrapeLetterboxdWatchlist, config, async () => {}, notify);
+  const malEntries = await scrapeSource("MyAnimeList", config.myanimelist, announced, scrapeMyAnimeListWatchlist, config, async () => {}, notify);
 
   // Merge new entries with existing entries (avoid duplicates)
   const newEntries = [...letterboxdEntries, ...malEntries];
