@@ -21,8 +21,8 @@ services:
       - DISCORD_WEBHOOK=
       # Server port (optional, defaults to 3000)
       - PORT=3000
-      # Refresh interval in seconds (optional, defaults to 300)
-      - REFRESH_INTERVAL=300
+      # Refresh interval in seconds (optional, defaults to 900)
+      - REFRESH_INTERVAL=900
     volumes:
       # Persist announced.jsonl across restarts
       - ./data:/app/data:rw

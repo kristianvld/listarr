@@ -50,8 +50,8 @@ services:
       - MYANIMELIST_USERS=username1,username2
       # Discord webhook (optional, leave empty to disable)
       - DISCORD_WEBHOOK=
-      # Refresh interval in seconds (optional, defaults to 300)
-      - REFRESH_INTERVAL=300
+      # Refresh interval in seconds (optional, defaults to 900)
+      - REFRESH_INTERVAL=900
     volumes:
       # Persist announced.jsonl across restarts
       - ./data:/app/data:rw
@@ -102,7 +102,7 @@ Configuration can be provided via:
 - `MYANIMELIST_USERS` - Comma or space-separated list of MyAnimeList usernames
 - `DISCORD_WEBHOOK` - Discord webhook URL (optional)
 - `PORT` - Server port (default: 3000)
-- `REFRESH_INTERVAL` - Refresh interval in seconds (default: 300)
+- `REFRESH_INTERVAL` - Refresh interval in seconds (default: 900)
 - `DATA_DIR` - Directory for persistent storage (default: current directory)
 
 ### Config File

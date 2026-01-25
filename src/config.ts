@@ -11,7 +11,7 @@ const ConfigSchema = z.object({
   myanimelist: z.array(z.string()).default([]),
   discordWebhook: z.string().url().nullable().optional(),
   port: z.number().int().positive().default(3000),
-  refreshInterval: z.number().int().positive().default(300),
+  refreshInterval: z.number().int().positive().default(900),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

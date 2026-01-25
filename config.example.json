@@ -11,5 +11,5 @@
     ],
     "discordWebhook": "https://discord.com/api/webhooks/...",
     "port": 3000,
-    "refreshInterval": 300
+    "refreshInterval": 900
 }
