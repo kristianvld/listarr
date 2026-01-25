@@ -8,13 +8,45 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Get the increment type (major, minor, patch) or default to patch
-INCREMENT_TYPE=${1:-patch}
+# Defaults
+INCREMENT_TYPE="patch"
+INTERACTIVE=true
+
+# Parse arguments
+for arg in "$@"; do
+    case "$arg" in
+        major|minor|patch)
+            INCREMENT_TYPE="$arg"
+            ;;
+        -y|--yes|--non-interactive)
+            INTERACTIVE=false
+            ;;
+        *)
+            echo -e "${RED}Error: Unknown argument '$arg'${NC}"
+            echo "Usage: $0 [major|minor|patch] [--non-interactive|--yes|-y]"
+            echo "Default: patch"
+            exit 1
+            ;;
+    esac
+done
+
+confirm() {
+    local prompt="$1"
+    if [ "$INTERACTIVE" = false ]; then
+        return 0
+    fi
+    read -p "$prompt (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        return 1
+    fi
+    return 0
+}
 
 # Validate increment type
 if [[ ! "$INCREMENT_TYPE" =~ ^(major|minor|patch)$ ]]; then
     echo -e "${RED}Error: Invalid increment type '$INCREMENT_TYPE'${NC}"
-    echo "Usage: $0 [major|minor|patch]"
+    echo "Usage: $0 [major|minor|patch] [--non-interactive|--yes|-y]"
     echo "Default: patch"
     exit 1
 fi
@@ -68,9 +100,7 @@ fi
 # Check if working directory is clean
 if ! git diff-index --quiet HEAD --; then
     echo -e "${YELLOW}Warning: Working directory has uncommitted changes${NC}"
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    if ! confirm "Continue anyway?"; then
         exit 1
     fi
 fi
@@ -90,16 +120,26 @@ REMOTE_COMMIT=$(git rev-parse origin/main 2>/dev/null || echo "")
 
 if [ -z "$REMOTE_COMMIT" ] || [ "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ]; then
     echo -e "${YELLOW}Current commit is not pushed to remote${NC}"
-    echo -e "${GREEN}Pushing main to remote...${NC}"
-    git push origin main
+    if confirm "Push main to origin?"; then
+        echo -e "${GREEN}Pushing main to remote...${NC}"
+        git push origin main
+    else
+        echo -e "${RED}Aborted: main must be pushed before release${NC}"
+        exit 1
+    fi
 fi
 
 # Create and push tag
 echo -e "${GREEN}Creating tag: $NEW_TAG${NC}"
 git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
 
-echo -e "${GREEN}Pushing tag to remote...${NC}"
-git push origin "$NEW_TAG"
+if confirm "Push tag $NEW_TAG to origin?"; then
+    echo -e "${GREEN}Pushing tag to remote...${NC}"
+    git push origin "$NEW_TAG"
+else
+    echo -e "${RED}Aborted: tag was created locally but not pushed${NC}"
+    exit 1
+fi
 
 echo -e "${GREEN}✓ Successfully created and pushed tag $NEW_TAG${NC}"
 echo -e "${YELLOW}GitHub Actions will now build and publish the Docker image${NC}"
