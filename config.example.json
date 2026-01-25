@@ -10,6 +10,7 @@
         "username3"
     ],
     "discordWebhook": "https://discord.com/api/webhooks/...",
+    "flareSolverrUrl": "http://localhost:8191",
     "port": 3000,
     "refreshInterval": 900,
     "failureNotificationThreshold": 3,

@@ -19,6 +19,8 @@ services:
       - MYANIMELIST_USERS=username1,username2,username3
       # Discord webhook (optional, leave empty to disable)
       - DISCORD_WEBHOOK=
+      # FlareSolverr URL for Letterboxd scraping (optional)
+      # - FLARESOLVERR_URL=http://flaresolverr:8191
       # Server port (optional, defaults to 3000)
       - PORT=3000
       # Refresh interval in seconds (optional, defaults to 900)

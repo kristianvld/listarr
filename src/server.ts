@@ -356,7 +356,14 @@ export async function refreshData(config: Config): Promise<void> {
 
   // Scrape sources sequentially to avoid overwhelming APIs (especially Jikan)
   // This prevents both scrapers from competing for rate limits
-  const letterboxdEntries = await scrapeSource("Letterboxd", config.letterboxd, announced, scrapeLetterboxdWatchlist, config, async () => {});
+  const letterboxdEntries = await scrapeSource(
+    "Letterboxd",
+    config.letterboxd,
+    announced,
+    (username, announcedSets, onEntry) => scrapeLetterboxdWatchlist(username, announcedSets, onEntry, { flareSolverrUrl: config.flareSolverrUrl }),
+    config,
+    async () => {},
+  );
   const malEntries = await scrapeSource("MyAnimeList", config.myanimelist, announced, scrapeMyAnimeListWatchlist, config, async () => {});
 
   // Merge new entries with existing entries (avoid duplicates)

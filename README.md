@@ -50,6 +50,8 @@ services:
       - MYANIMELIST_USERS=username1,username2
       # Discord webhook (optional, leave empty to disable)
       - DISCORD_WEBHOOK=
+      # FlareSolverr URL for Letterboxd scraping (optional)
+      - FLARESOLVERR_URL=http://flaresolverr:8191
       # Refresh interval in seconds (optional, defaults to 900)
       - REFRESH_INTERVAL=900
     volumes:
@@ -101,6 +103,7 @@ Configuration can be provided via:
 - `LETTERBOXD_USERS` - Comma or space-separated list of Letterboxd usernames
 - `MYANIMELIST_USERS` - Comma or space-separated list of MyAnimeList usernames
 - `DISCORD_WEBHOOK` - Discord webhook URL (optional)
+- `FLARESOLVERR_URL` - FlareSolverr base URL for Letterboxd scraping (optional)
 - `PORT` - Server port (default: 3000)
 - `REFRESH_INTERVAL` - Refresh interval in seconds (default: 900)
 - `FAILURE_NOTIFICATION_THRESHOLD` - Consecutive failures before notifying (default: 3)

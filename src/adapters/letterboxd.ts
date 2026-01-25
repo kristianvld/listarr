@@ -1,4 +1,4 @@
-import { fetchHtml, fetchJson } from "../utils";
+import { fetchHtml, fetchJson, fetchHtmlViaFlareSolverr, fetchJsonViaFlareSolverr } from "../utils";
 import { idLookup } from "../id-lookup";
 import type { MediaEntry } from "./schemas";
 import * as cheerio from "cheerio";
@@ -21,7 +21,27 @@ async function rateLimitedRequest<T>(fn: () => Promise<T>): Promise<T> {
   return fn();
 }
 
-export async function scrapeLetterboxdWatchlist(username: string, announced: { byKey: Set<string> }, onEntryProcessed: (entry: MediaEntry) => Promise<void>): Promise<void> {
+function createLetterboxdFetchers(flareSolverrUrl?: string | null) {
+  if (flareSolverrUrl) {
+    return {
+      fetchHtml: (url: string) => fetchHtmlViaFlareSolverr(url, flareSolverrUrl),
+      fetchJson: (url: string) => fetchJsonViaFlareSolverr(url, flareSolverrUrl),
+    };
+  }
+
+  return {
+    fetchHtml,
+    fetchJson,
+  };
+}
+
+export async function scrapeLetterboxdWatchlist(
+  username: string,
+  announced: { byKey: Set<string> },
+  onEntryProcessed: (entry: MediaEntry) => Promise<void>,
+  options?: { flareSolverrUrl?: string | null },
+): Promise<void> {
+  const { fetchHtml: fetchLetterboxdHtml, fetchJson: fetchLetterboxdJson } = createLetterboxdFetchers(options?.flareSolverrUrl);
   // Handle pagination - start with page 1
   let currentPage = 1;
   let hasMorePages = true;
@@ -29,7 +49,7 @@ export async function scrapeLetterboxdWatchlist(username: string, announced: { b
   while (hasMorePages) {
     const url = currentPage === 1 ? `https://letterboxd.com/${username}/watchlist/` : `https://letterboxd.com/${username}/watchlist/page/${currentPage}/`;
 
-    const html = await rateLimitedRequest(() => fetchHtml(url));
+    const html = await rateLimitedRequest(() => fetchLetterboxdHtml(url));
     const $ = cheerio.load(html);
 
     // Letterboxd watchlist uses li.griditem with data attributes
@@ -106,7 +126,7 @@ export async function scrapeLetterboxdWatchlist(username: string, announced: { b
         // Get poster image URL from poster endpoint (most reliable)
         try {
           const posterJsonUrl = `https://letterboxd.com/film/${slug}/poster/std/250/`;
-          const posterData = (await rateLimitedRequest(() => fetchJson(posterJsonUrl))) as { url?: string };
+          const posterData = (await rateLimitedRequest(() => fetchLetterboxdJson(posterJsonUrl))) as { url?: string };
           if (posterData?.url) {
             imageUrl = posterData.url;
           }
@@ -126,7 +146,7 @@ export async function scrapeLetterboxdWatchlist(username: string, announced: { b
         if (!tmdbId || !isAnime) {
           try {
             const filmPageUrl = `https://letterboxd.com/film/${slug}/`;
-            const filmPageHtml = await rateLimitedRequest(() => fetchHtml(filmPageUrl));
+            const filmPageHtml = await rateLimitedRequest(() => fetchLetterboxdHtml(filmPageUrl));
             const $filmPage = cheerio.load(filmPageHtml);
 
             // Fallback: Look for TMDB link if not found in lookup

@@ -77,6 +77,52 @@ export async function fetchJson(url: string, options?: { headers?: Record<string
   return await response.json();
 }
 
+type FlareSolverrResponse = {
+  status: "ok" | "error";
+  message?: string;
+  solution?: {
+    response?: string;
+    status?: number;
+    url?: string;
+    headers?: Record<string, string>;
+  };
+};
+
+// Helper to fetch HTML via FlareSolverr
+export async function fetchHtmlViaFlareSolverr(url: string, flareSolverrUrl: string): Promise<string> {
+  const endpoint = new URL("/v1", flareSolverrUrl).toString();
+  console.log(`Fetching HTML via FlareSolverr from ${url}`);
+  const data = (await httpClient
+    .post(endpoint, {
+      json: {
+        cmd: "request.get",
+        url,
+        maxTimeout: 30000,
+      },
+      headers: {
+        "Content-Type": "application/json",
+      },
+    })
+    .json()) as FlareSolverrResponse;
+
+  if (data.status !== "ok" || !data.solution?.response) {
+    throw new Error(`[FlareSolverr] ${data.message || "Unknown error"}`);
+  }
+
+  return data.solution.response;
+}
+
+// Helper to fetch JSON via FlareSolverr (parses solution response)
+export async function fetchJsonViaFlareSolverr(url: string, flareSolverrUrl: string): Promise<unknown> {
+  const raw = await fetchHtmlViaFlareSolverr(url, flareSolverrUrl);
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`[FlareSolverr] Failed to parse JSON response from ${url}: ${message}`);
+  }
+}
+
 // Helper to extract Retry-After header value (in seconds)
 // Accepts Response object or Headers object or object with headers property
 export function getRetryAfterSeconds(response: Response | Headers | { headers?: Headers } | null | undefined): number | null {

@@ -10,6 +10,7 @@ const ConfigSchema = z.object({
   letterboxd: z.array(z.string()).default([]),
   myanimelist: z.array(z.string()).default([]),
   discordWebhook: z.string().url().nullable().optional(),
+  flareSolverrUrl: z.string().url().nullable().optional(),
   port: z.number().int().positive().default(3000),
   refreshInterval: z.number().int().positive().default(900),
   failureNotificationThreshold: z.number().int().positive().default(3),
@@ -41,6 +42,7 @@ export async function loadConfig(): Promise<Config> {
     letterboxd: parseEnvArray("LETTERBOXD_USERS"),
     myanimelist: parseEnvArray("MYANIMELIST_USERS"),
     discordWebhook: process.env.DISCORD_WEBHOOK || undefined,
+    flareSolverrUrl: process.env.FLARESOLVERR_URL || undefined,
     port: process.env.PORT ? parseInt(process.env.PORT, 10) : undefined,
     refreshInterval: process.env.REFRESH_INTERVAL ? parseInt(process.env.REFRESH_INTERVAL, 10) : undefined,
     failureNotificationThreshold: process.env.FAILURE_NOTIFICATION_THRESHOLD ? parseInt(process.env.FAILURE_NOTIFICATION_THRESHOLD, 10) : undefined,
@@ -61,6 +63,7 @@ export function printConfig(config: Config): void {
   console.log(`Letterboxd users: ${config.letterboxd.length > 0 ? config.letterboxd.join(", ") : "(none)"}`);
   console.log(`MyAnimeList users: ${config.myanimelist.length > 0 ? config.myanimelist.join(", ") : "(none)"}`);
   console.log(`Discord webhook: ${config.discordWebhook ? "configured" : "not configured"}`);
+  console.log(`FlareSolverr: ${config.flareSolverrUrl ? config.flareSolverrUrl : "not configured"}`);
   console.log(`Port: ${config.port}`);
   console.log(`Refresh interval: ${config.refreshInterval} seconds`);
   console.log(`Failure notification threshold: ${config.failureNotificationThreshold} consecutive failure(s)`);
