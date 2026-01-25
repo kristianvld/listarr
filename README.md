@@ -103,6 +103,8 @@ Configuration can be provided via:
 - `DISCORD_WEBHOOK` - Discord webhook URL (optional)
 - `PORT` - Server port (default: 3000)
 - `REFRESH_INTERVAL` - Refresh interval in seconds (default: 900)
+- `FAILURE_NOTIFICATION_THRESHOLD` - Consecutive failures before notifying (default: 3)
+- `FAILURE_NOTIFICATION_REPEAT_INTERVAL_SECONDS` - Repeat notify interval in seconds (default: 86400)
 - `DATA_DIR` - Directory for persistent storage (default: current directory)
 
 ### Config File

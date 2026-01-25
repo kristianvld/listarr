@@ -10,8 +10,15 @@ const ANNOUNCED_FILE = `${DATA_DIR}/announced.jsonl`;
 
 type AnnouncedSets = { byKey: Set<string>; byMalId: Set<number>; byRootMalId: Set<number> };
 
+type FailureState = {
+  consecutiveFailures: number;
+  firstFailureAt: number;
+  lastFailureAt: number;
+  lastNotifiedAt?: number;
+};
+
 // Track which sources/users are currently failing (in-memory only, reset on restart)
-const failingScrapes = new Map<string, boolean>(); // Key: "source:username", Value: true if currently failing
+const failingScrapes = new Map<string, FailureState>(); // Key: "source:username"
 
 let allEntries: MediaEntry[] = [];
 
@@ -172,12 +179,12 @@ export async function sendDiscordErrorNotification(config: Config, title: string
   await sendDiscordWebhook(config.discordWebhook, embed);
 }
 
-async function sendDiscordRecoveryNotification(config: Config, sourceName: string, username: string): Promise<void> {
+async function sendDiscordRecoveryNotification(config: Config, sourceName: string, username: string, description?: string): Promise<void> {
   if (!config.discordWebhook) return;
 
   const embed: Record<string, unknown> = {
     title: `✅ ${sourceName} Scraping Recovered`,
-    description: `Successfully scraped ${sourceName} watchlist for user **${username}** after previous failures.`,
+    description: description || `Successfully scraped ${sourceName} watchlist for user **${username}** after previous failures.`,
     color: 0x00ff00, // Green for recovery
     timestamp: new Date().toISOString(),
   };
@@ -258,13 +265,27 @@ async function processEntry(entry: MediaEntry, config: Config, announced: Announ
   if (entry.rootMalId) announced.byRootMalId.add(entry.rootMalId);
 }
 
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 // Helper to scrape a source with error handling
 async function scrapeSource(sourceName: string, usernames: string[], announced: AnnouncedSets, scraper: (username: string, announced: AnnouncedSets, onEntry: (entry: MediaEntry) => Promise<void>) => Promise<void>, config: Config, onEntryProcessed: (entry: MediaEntry) => Promise<void>): Promise<MediaEntry[]> {
   const entries: MediaEntry[] = [];
 
   for (const username of usernames) {
     const scrapeKey = `${sourceName.toLowerCase()}:${username}`;
-    const wasFailing = failingScrapes.get(scrapeKey) === true;
+    const failureState = failingScrapes.get(scrapeKey);
+    const wasNotified = failureState?.lastNotifiedAt !== undefined;
 
     try {
       console.log(`Starting ${sourceName} scrape for ${username}...`);
@@ -275,27 +296,51 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
       });
       console.log(`✓ Completed ${sourceName} scrape for ${username}`);
 
-      // If this scrape was previously failing, notify that it's working again
-      if (wasFailing) {
+      if (failureState) {
+        const durationMs = Date.now() - failureState.firstFailureAt;
+        const duration = formatDuration(durationMs);
+        const attempts = failureState.consecutiveFailures;
         failingScrapes.delete(scrapeKey);
-        await sendDiscordRecoveryNotification(config, sourceName, username);
-      } else {
-        // Ensure it's marked as not failing
-        failingScrapes.delete(scrapeKey);
+
+        // If this scrape was previously notified, notify that it's working again
+        if (wasNotified) {
+          const description = `Successfully scraped ${sourceName} watchlist for user **${username}** after ${attempts} consecutive failure(s) over ${duration}.`;
+          await sendDiscordRecoveryNotification(config, sourceName, username, description);
+        }
       }
     } catch (error) {
       console.error(`[ERROR] Failed to scrape ${sourceName} for ${username}:`, error);
-      failingScrapes.set(scrapeKey, true);
+      const now = Date.now();
+      const threshold = config.failureNotificationThreshold;
+      const repeatIntervalMs = config.failureNotificationRepeatIntervalSeconds * 1000;
+      const nextFailureState: FailureState = failureState
+        ? {
+            ...failureState,
+            consecutiveFailures: failureState.consecutiveFailures + 1,
+            lastFailureAt: now,
+          }
+        : {
+            consecutiveFailures: 1,
+            firstFailureAt: now,
+            lastFailureAt: now,
+          };
 
-      // Only send the failure notification the first time we detect the issue.
-      if (!wasFailing) {
-        await sendDiscordErrorNotification(
-          config,
-          `Failed to Scrape ${sourceName}`,
-          `Failed to scrape ${sourceName} watchlist for user **${username}**`,
-          error,
-        );
-      } else {
+      failingScrapes.set(scrapeKey, nextFailureState);
+
+      const shouldNotifyInitial = nextFailureState.consecutiveFailures >= threshold && !nextFailureState.lastNotifiedAt;
+      const shouldNotifyRepeat =
+        nextFailureState.lastNotifiedAt !== undefined &&
+        repeatIntervalMs > 0 &&
+        now - nextFailureState.lastNotifiedAt >= repeatIntervalMs;
+
+      if (shouldNotifyInitial || shouldNotifyRepeat) {
+        const duration = formatDuration(now - nextFailureState.firstFailureAt);
+        const attempts = nextFailureState.consecutiveFailures;
+        const description = `Failed to scrape ${sourceName} watchlist for user **${username}**. This scraper has failed ${attempts} consecutive time(s) over ${duration}.`;
+        await sendDiscordErrorNotification(config, `Failed to Scrape ${sourceName}`, description, error);
+        nextFailureState.lastNotifiedAt = now;
+        failingScrapes.set(scrapeKey, nextFailureState);
+      } else if (nextFailureState.consecutiveFailures >= threshold) {
         console.log(`[WARN] Suppressing duplicate ${sourceName} failure notification for ${username}`);
       }
       // Continue with next username even if this one fails
