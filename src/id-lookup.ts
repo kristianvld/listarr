@@ -9,15 +9,13 @@ const BaseIdEntrySchema = z
   })
   .loose();
 
-const MalIdEntrySchema = BaseIdEntrySchema.extend({
-  imdb: z.string().nullable().optional(),
-  trakt: z.number().nullable().optional(),
-});
-
-const LetterboxdIdEntrySchema = BaseIdEntrySchema.extend({
-  myanimelist: z.number().nullable().optional(),
+const AnimeApiEntrySchema = BaseIdEntrySchema.extend({
   anidb: z.number().nullable().optional(),
   anilist: z.number().nullable().optional(),
+  myanimelist: z.number().nullable().optional(),
+  letterboxd_slug: z.string().nullable().optional(),
+  letterboxd_lid: z.string().nullable().optional(),
+  letterboxd_uid: z.number().nullable().optional(),
 });
 
 type IdLookupResult = {
@@ -39,10 +37,10 @@ class IdLookupService {
     return result;
   }
 
-  private async loadDatabase<T>(url: string, name: string, schema: z.ZodType<T>, processor: (entries: Record<string, T>) => void): Promise<void> {
+  private async loadDatabaseArray<T>(url: string, name: string, schema: z.ZodType<T>, processor: (entries: T[]) => void): Promise<void> {
     try {
       const data = await fetchJson(url);
-      const entries = z.record(z.string(), schema).parse(data);
+      const entries = z.array(schema).parse(data);
       processor(entries);
     } catch (error) {
       const errorMsg = `Failed to load ${name} ID lookup database: ${error}`;
@@ -57,27 +55,38 @@ class IdLookupService {
     console.log("Loading ID lookup databases...");
 
     await Promise.all([
-      this.loadDatabase("https://raw.githubusercontent.com/nattadasu/animeApi/refs/heads/v3/database/myanimelist_object.json", "MAL", MalIdEntrySchema, (entries) => {
-        for (const [malIdStr, entry] of Object.entries(entries)) {
-          const malId = parseInt(malIdStr, 10);
-          if (isNaN(malId)) continue;
-
+      this.loadDatabaseArray("https://raw.githubusercontent.com/nattadasu/animeApi/refs/heads/v3/database/animeapi.json", "AnimeAPI master", AnimeApiEntrySchema, (entries) => {
+        for (const entry of entries) {
           const result = this.buildResult(entry);
-          if (result.tmdb || result.tvdb) {
-            this.malLookup.set(malId, result);
+
+          if (entry.myanimelist !== null && entry.myanimelist !== undefined) {
+            if (result.tmdb || result.tvdb) {
+              this.malLookup.set(entry.myanimelist, result);
+            }
+          }
+
+          const letterboxdKeys: string[] = [];
+          if (entry.letterboxd_slug) letterboxdKeys.push(entry.letterboxd_slug);
+          if (entry.letterboxd_lid) letterboxdKeys.push(entry.letterboxd_lid);
+          if (entry.letterboxd_uid !== null && entry.letterboxd_uid !== undefined) {
+            letterboxdKeys.push(entry.letterboxd_uid.toString());
+          }
+
+          if (letterboxdKeys.length > 0) {
+            const letterboxdResult: IdLookupResult = {
+              ...result,
+              isAnime: !!(entry.myanimelist || entry.anidb || entry.anilist),
+            };
+
+            if (letterboxdResult.tmdb || letterboxdResult.tvdb || letterboxdResult.isAnime) {
+              for (const key of letterboxdKeys) {
+                this.letterboxdLookup.set(key, letterboxdResult);
+              }
+            }
           }
         }
+
         console.log(`Loaded ${this.malLookup.size} MAL ID mappings`);
-      }),
-      this.loadDatabase("https://raw.githubusercontent.com/nattadasu/animeApi/refs/heads/v3/database/letterboxd_object.json", "Letterboxd", LetterboxdIdEntrySchema, (entries) => {
-        for (const [slug, entry] of Object.entries(entries)) {
-          const result = this.buildResult(entry);
-          result.isAnime = !!(entry.myanimelist || entry.anidb || entry.anilist);
-
-          if (result.tmdb || result.tvdb || result.isAnime) {
-            this.letterboxdLookup.set(slug, result);
-          }
-        }
         console.log(`Loaded ${this.letterboxdLookup.size} Letterboxd ID mappings`);
       }),
     ]);
