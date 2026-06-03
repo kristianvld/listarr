@@ -192,25 +192,15 @@ async function sendDiscordRecoveryNotification(config: Config, sourceName: strin
   await sendDiscordWebhook(config.discordWebhook, embed);
 }
 
-async function sendDiscordNotification(entry: MediaEntry, config: Config): Promise<void> {
-  if (!config.discordWebhook) return;
+function getTypeLabel(entry: MediaEntry): string {
+  return entry.type === "movie" ? (entry.anime ? "Anime Movie" : "Movie") : entry.anime ? "Anime Shows" : "Shows";
+}
 
-  const typeLabel = entry.type === "movie" ? (entry.anime ? "Anime Movie" : "Movie") : entry.anime ? "Anime Shows" : "Shows";
+function getSourceLink(entry: MediaEntry): string {
+  return entry.source === "myanimelist" ? `[MAL [${entry.username}]](https://myanimelist.net/animelist/${entry.username}?status=6)` : `[Letterboxd [${entry.username}]](https://letterboxd.com/${entry.username}/watchlist/)`;
+}
 
-  const sourceLink = entry.source === "myanimelist" ? `[MAL [${entry.username}]](https://myanimelist.net/animelist/${entry.username}?status=6)` : `[Letterboxd [${entry.username}]](https://letterboxd.com/${entry.username}/watchlist/)`;
-
-  const fields: Array<{ name: string; value: string; inline: boolean }> = [
-    { name: "Type", value: typeLabel, inline: true },
-    { name: "Year", value: String(entry.year), inline: true },
-  ];
-
-  if (entry.type === "tv" && entry.episodes) {
-    fields.push({ name: "Episodes", value: String(entry.episodes), inline: true });
-  }
-
-  fields.push({ name: "Source", value: sourceLink, inline: false });
-
-  // Build ID links
+function getIdLinks(entry: MediaEntry): string[] {
   const idLinks: string[] = [];
   if (entry.source === "letterboxd" && entry.letterboxdSlug) {
     idLinks.push(`[Letterboxd](https://letterboxd.com/film/${entry.letterboxdSlug}/)`);
@@ -227,15 +217,38 @@ async function sendDiscordNotification(entry: MediaEntry, config: Config): Promi
     const tmdbType = entry.type === "movie" ? "movie" : "tv";
     idLinks.push(`[TMDB](https://www.themoviedb.org/${tmdbType}/${entry.tmdb})`);
   }
+
+  return idLinks;
+}
+
+function getDiscordFields(entry: MediaEntry): Array<{ name: string; value: string; inline: boolean }> {
+  const fields: Array<{ name: string; value: string; inline: boolean }> = [
+    { name: "Type", value: getTypeLabel(entry), inline: true },
+    { name: "Year", value: String(entry.year), inline: true },
+  ];
+
+  if (entry.type === "tv" && entry.episodes) {
+    fields.push({ name: "Episodes", value: String(entry.episodes), inline: true });
+  }
+
+  fields.push({ name: "Source", value: getSourceLink(entry), inline: false });
+
+  const idLinks = getIdLinks(entry);
   if (idLinks.length > 0) {
     fields.push({ name: "Links", value: idLinks.join(" - "), inline: false });
   }
+
+  return fields;
+}
+
+async function sendDiscordNotification(entry: MediaEntry, config: Config): Promise<void> {
+  if (!config.discordWebhook) return;
 
   const embed: Record<string, unknown> = {
     title: entry.title,
     color: entry.anime ? 0x2e51a2 : 0x00e054,
     timestamp: new Date().toISOString(),
-    fields,
+    fields: getDiscordFields(entry),
   };
 
   const imageUrl = entry.imageUrl;
@@ -245,6 +258,20 @@ async function sendDiscordNotification(entry: MediaEntry, config: Config): Promi
   } else {
     console.warn(`No image URL for entry: ${entry.title} (source: ${entry.source})`);
   }
+
+  await sendDiscordWebhook(config.discordWebhook, embed);
+}
+
+async function sendDiscordRemovalNotification(entry: MediaEntry, config: Config): Promise<void> {
+  if (!config.discordWebhook) return;
+
+  const embed: Record<string, unknown> = {
+    title: `Removed from Listarr: ${entry.title}`,
+    description: "No longer present in any monitored source list.",
+    color: 0xff6b35,
+    timestamp: new Date().toISOString(),
+    fields: getDiscordFields(entry),
+  };
 
   await sendDiscordWebhook(config.discordWebhook, embed);
 }
@@ -272,6 +299,12 @@ async function processActiveAdd(entry: MediaEntry, config: Config, index: EntryI
   if (notify) {
     await sendDiscordNotification(entry, config);
   }
+}
+
+async function processActiveRemoval(key: string, entry: MediaEntry, config: Config, index: EntryIndex): Promise<void> {
+  await appendRemovedEntry(key, entry);
+  recordRemoval(index, key);
+  await sendDiscordRemovalNotification(entry, config);
 }
 
 function formatDuration(ms: number): string {
@@ -435,8 +468,7 @@ export async function refreshData(config: Config): Promise<void> {
         continue;
       }
 
-      await appendRemovedEntry(key, entry);
-      recordRemoval(index, key);
+      await processActiveRemoval(key, entry, config, index);
       activeByKey.delete(key);
       removedCount++;
     }
