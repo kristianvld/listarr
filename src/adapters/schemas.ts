@@ -14,17 +14,44 @@ export const MediaEntrySchema = z.object({
   rootMalId: z.number().optional(), // Root MAL ID (for OVAs/seasons)
   imageUrl: z.string().optional(), // Image URL for Discord embeds (runtime only)
   episodes: z.number().optional(), // Number of episodes (runtime only)
+  intermediaryMalIds: z.array(z.number()).optional(), // Runtime-only MAL aliases found while tracing roots
   letterboxdSlug: z.string().optional(), // Letterboxd slug for constructing links
 });
 
 export type MediaEntry = z.infer<typeof MediaEntrySchema>;
 
-// Schema for persisted entries (adds timestamp)
-export const AnnouncedEntrySchema = MediaEntrySchema.extend({
+const PersistedMediaEntrySchema = MediaEntrySchema.omit({
+  imageUrl: true,
+  episodes: true,
+  intermediaryMalIds: true,
+});
+
+// Schema for persisted add entries (adds timestamp and event)
+export const AnnouncedEntrySchema = PersistedMediaEntrySchema.extend({
+  event: z.literal("add").default("add"),
   timestamp: z.string(),
-}).omit({ imageUrl: true, episodes: true }); // Don't persist runtime-only fields
+});
 
 export type AnnouncedEntry = z.infer<typeof AnnouncedEntrySchema>;
+
+export const RemovedEntrySchema = PersistedMediaEntrySchema.extend({
+  event: z.literal("remove"),
+  timestamp: z.string(),
+  key: z.string(),
+  reason: z.literal("absent_from_all_sources").default("absent_from_all_sources"),
+});
+
+export type RemovedEntry = z.infer<typeof RemovedEntrySchema>;
+
+export const EntryLogEventSchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && !("event" in value)) {
+    return { ...(value as Record<string, unknown>), event: "add" };
+  }
+
+  return value;
+}, z.discriminatedUnion("event", [AnnouncedEntrySchema, RemovedEntrySchema]));
+
+export type EntryLogEvent = z.infer<typeof EntryLogEventSchema>;
 
 export const IdsMoeResponseSchema = z
   .object({

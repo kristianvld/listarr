@@ -1,7 +1,16 @@
 import { z } from "zod";
 import { fetchJson, fetchJsonResponse, getRetryAfterSeconds } from "../utils";
-import { MyAnimeListEntrySchema, AnnouncedEntrySchema, JikanAnimeSchema, type MediaEntry } from "./schemas";
+import { MyAnimeListEntrySchema, JikanAnimeSchema, type MediaEntry } from "./schemas";
 import { idLookup } from "../id-lookup";
+import {
+  addCurrentEntry,
+  addCurrentKey,
+  createScrapedWatchlist,
+  getKnownMalKey,
+  indexMalAlias,
+  type EntryIndex,
+  type ScrapedWatchlist,
+} from "../entry-state";
 
 const JIKAN_BASE = "https://api.jikan.moe/v4";
 
@@ -189,7 +198,8 @@ async function traceToRootSeries(malId: number, originalType: string, announced:
   }
 }
 
-export async function scrapeMyAnimeListWatchlist(username: string, announced: { byKey: Set<string>; byMalId: Set<number>; byRootMalId: Set<number> }, onEntryProcessed: (entry: MediaEntry) => Promise<void>): Promise<void> {
+export async function scrapeMyAnimeListWatchlist(username: string, index: EntryIndex): Promise<ScrapedWatchlist> {
+  const snapshot = createScrapedWatchlist();
   let offset = 0;
   let hasMore = true;
 
@@ -211,7 +221,9 @@ export async function scrapeMyAnimeListWatchlist(username: string, announced: { 
       if (malEntry.status !== 6) continue; // Only process "Plan to Watch" items
 
       // Check if this MAL ID is already processed
-      if (announced.byMalId.has(malEntry.anime_id)) {
+      const knownKey = getKnownMalKey(index, malEntry.anime_id);
+      if (knownKey) {
+        addCurrentKey(snapshot, knownKey);
         continue;
       }
 
@@ -226,16 +238,18 @@ export async function scrapeMyAnimeListWatchlist(username: string, announced: { 
         const intermediaries: number[] = [];
 
         // Try to trace to parent TV series (movies only trace if sandwiched between TV series)
-        rootMalId = await traceToRootSeries(malEntry.anime_id, anime.type, announced, (malId) => {
+        rootMalId = await traceToRootSeries(malEntry.anime_id, anime.type, index, (malId) => {
           intermediaries.push(malId);
         });
 
         // Check if root is already processed
-        if (announced.byRootMalId.has(rootMalId)) {
+        const knownRootKey = getKnownMalKey(index, rootMalId);
+        if (knownRootKey) {
+          addCurrentKey(snapshot, knownRootKey);
           // Mark this entry and intermediaries as processed
-          announced.byMalId.add(malEntry.anime_id);
+          indexMalAlias(index, malEntry.anime_id, knownRootKey);
           for (const interId of intermediaries) {
-            announced.byMalId.add(interId);
+            indexMalAlias(index, interId, knownRootKey);
           }
           continue;
         }
@@ -313,36 +327,14 @@ export async function scrapeMyAnimeListWatchlist(username: string, announced: { 
           rootMalId: rootMalId !== malEntry.anime_id ? rootMalId : undefined,
           imageUrl,
           episodes,
+          intermediaryMalIds: intermediaries.length > 0 ? intermediaries : undefined,
         };
 
-        // Process entry immediately (adds to announced.jsonl, sends Discord, adds to entries list)
-        await onEntryProcessed(entry);
+        const key = addCurrentEntry(snapshot, index, entry);
 
-        // Also mark intermediaries as processed (add to announced sets to prevent reprocessing)
+        // Also mark intermediaries as processed for this refresh to prevent reprocessing
         for (const interId of intermediaries) {
-          if (!announced.byMalId.has(interId)) {
-            announced.byMalId.add(interId);
-            // Add stub entry to announced.jsonl to prevent reprocessing (won't appear in lists)
-            const stubEntry: MediaEntry = {
-              title: `[Intermediary: MAL ${interId}]`,
-              year: 1900, // Dummy year - will be filtered out from lists
-              type: "tv",
-              source: "myanimelist",
-              username,
-              anime: true,
-              malId: interId,
-              rootMalId,
-            };
-            // Only add to announced.jsonl, don't send Discord or add to entries list
-            const announcedEntry = AnnouncedEntrySchema.parse({
-              ...stubEntry,
-              timestamp: new Date().toISOString(),
-            });
-            const line = JSON.stringify(announcedEntry) + "\n";
-            const file = Bun.file("announced.jsonl");
-            const existingContent = (await file.exists()) ? await file.text() : "";
-            await Bun.write("announced.jsonl", existingContent + line);
-          }
+          indexMalAlias(index, interId, key);
         }
       } catch (error) {
         console.error(`[ERROR] Failed to process MAL entry ${malEntry.anime_id}:`, error);
@@ -352,4 +344,6 @@ export async function scrapeMyAnimeListWatchlist(username: string, announced: { 
     // Update offset for next page
     offset += malEntries.length;
   }
+
+  return snapshot;
 }

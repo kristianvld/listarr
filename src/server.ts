@@ -1,20 +1,31 @@
 import type { Config } from "./config";
 import { scrapeLetterboxdWatchlist } from "./adapters/letterboxd";
 import { scrapeMyAnimeListWatchlist } from "./adapters/myanimelist";
-import { AnnouncedEntrySchema, type AnnouncedEntry, type MediaEntry } from "./adapters/schemas";
+import { AnnouncedEntrySchema, EntryLogEventSchema, RemovedEntrySchema, type EntryLogEvent, type MediaEntry } from "./adapters/schemas";
+import {
+  buildEntryIndex,
+  createIntermediaryEntry,
+  recordActiveAdd,
+  recordHistoricalAdd,
+  recordRemoval,
+  type EntryIndex,
+  type ScrapedWatchlist,
+} from "./entry-state";
 import { httpClient, getDiscordRateLimitInfo } from "./utils";
 
 // Use data directory if specified via env, otherwise default to current directory (for local development)
 const DATA_DIR = process.env.DATA_DIR || ".";
 const ANNOUNCED_FILE = `${DATA_DIR}/announced.jsonl`;
 
-type AnnouncedSets = { byKey: Set<string>; byMalId: Set<number>; byRootMalId: Set<number> };
-
 type FailureState = {
   consecutiveFailures: number;
   firstFailureAt: number;
   lastFailureAt: number;
   lastNotifiedAt?: number;
+};
+
+type SourceScrapeResult = ScrapedWatchlist & {
+  complete: boolean;
 };
 
 // Track which sources/users are currently failing (in-memory only, reset on restart)
@@ -24,20 +35,6 @@ let allEntries: MediaEntry[] = [];
 
 export function setAllEntries(entries: MediaEntry[]): void {
   allEntries = entries;
-}
-
-// Helper to generate a unique key for an entry
-function getEntryKey(entry: { tmdb?: string; tvdb?: string; title: string; year: number; source: string; username: string }): string {
-  return entry.tmdb ? `tmdb:${entry.tmdb}` : entry.tvdb ? `tvdb:${entry.tvdb}` : `${entry.title}:${entry.year}:${entry.source}:${entry.username}`;
-}
-
-// Helper to convert AnnouncedEntry to MediaEntry (adds runtime-only fields)
-function announcedToMedia(entry: AnnouncedEntry): MediaEntry {
-  return {
-    ...entry,
-    imageUrl: undefined, // Runtime-only, not persisted
-    episodes: undefined, // Runtime-only, not persisted
-  };
 }
 
 // Helper to parse NDJSON file
@@ -68,36 +65,39 @@ async function parseNdjsonFile<T>(filePath: string, parser: (obj: unknown) => T)
   }
 }
 
-async function loadAnnouncedEntries(): Promise<AnnouncedSets> {
-  const entries = await parseNdjsonFile(ANNOUNCED_FILE, (obj) => AnnouncedEntrySchema.parse(obj));
-
-  const byKey = new Set<string>();
-  const byMalId = new Set<number>();
-  const byRootMalId = new Set<number>();
-
-  for (const entry of entries) {
-    byKey.add(getEntryKey(entry));
-    if (entry.source === "letterboxd" && entry.letterboxdSlug) {
-      byKey.add(`letterboxd:${entry.letterboxdSlug}:${entry.year}`);
-    }
-    if (entry.malId) byMalId.add(entry.malId);
-    if (entry.rootMalId) byRootMalId.add(entry.rootMalId);
-  }
-
-  return { byKey, byMalId, byRootMalId };
+async function loadEntryIndex(): Promise<EntryIndex> {
+  const events = await parseNdjsonFile(ANNOUNCED_FILE, (obj) => EntryLogEventSchema.parse(obj));
+  return buildEntryIndex(events);
 }
 
-async function appendAnnouncedEntry(entry: MediaEntry): Promise<void> {
-  const announcedEntry: AnnouncedEntry = AnnouncedEntrySchema.parse({
-    ...entry,
-    timestamp: new Date().toISOString(),
-  });
-
-  const line = JSON.stringify(announcedEntry) + "\n";
+async function appendEntryLogEvent(event: EntryLogEvent): Promise<void> {
+  const line = JSON.stringify(event) + "\n";
   const file = Bun.file(ANNOUNCED_FILE);
   const existingContent = (await file.exists()) ? await file.text() : "";
   // Bun.write() automatically creates parent directories if they don't exist
   await Bun.write(ANNOUNCED_FILE, existingContent + line);
+}
+
+async function appendAnnouncedEntry(entry: MediaEntry): Promise<void> {
+  const announcedEntry = AnnouncedEntrySchema.parse({
+    ...entry,
+    event: "add",
+    timestamp: new Date().toISOString(),
+  });
+
+  await appendEntryLogEvent(announcedEntry);
+}
+
+async function appendRemovedEntry(key: string, entry: MediaEntry): Promise<void> {
+  const removedEntry = RemovedEntrySchema.parse({
+    ...entry,
+    event: "remove",
+    key,
+    reason: "absent_from_all_sources",
+    timestamp: new Date().toISOString(),
+  });
+
+  await appendEntryLogEvent(removedEntry);
 }
 
 // Discord webhook constants
@@ -250,19 +250,28 @@ async function sendDiscordNotification(entry: MediaEntry, config: Config): Promi
 }
 
 export async function loadAllEntries(): Promise<MediaEntry[]> {
-  const entries = await parseNdjsonFile(ANNOUNCED_FILE, (obj) => AnnouncedEntrySchema.parse(obj));
-  return entries.map(announcedToMedia).filter((e) => !e.title.startsWith("[Intermediary:"));
+  const index = await loadEntryIndex();
+  return [...index.activeByKey.values()].filter((e) => !e.title.startsWith("[Intermediary:"));
 }
 
-// Helper to process a single entry (save, notify, track)
-async function processEntry(entry: MediaEntry, config: Config, announced: AnnouncedSets): Promise<void> {
-  await appendAnnouncedEntry(entry);
-  await sendDiscordNotification(entry, config);
+async function appendIntermediaryEntries(entry: MediaEntry, index: EntryIndex): Promise<void> {
+  if (!entry.rootMalId || !entry.intermediaryMalIds) return;
 
-  // Update announced sets for deduplication
-  announced.byKey.add(getEntryKey(entry));
-  if (entry.malId) announced.byMalId.add(entry.malId);
-  if (entry.rootMalId) announced.byRootMalId.add(entry.rootMalId);
+  for (const malId of entry.intermediaryMalIds) {
+    const stubEntry = createIntermediaryEntry(entry.username, malId, entry.rootMalId);
+    await appendAnnouncedEntry(stubEntry);
+    recordHistoricalAdd(index, stubEntry);
+  }
+}
+
+async function processActiveAdd(entry: MediaEntry, config: Config, index: EntryIndex, notify: boolean): Promise<void> {
+  await appendAnnouncedEntry(entry);
+  recordActiveAdd(index, entry);
+  await appendIntermediaryEntries(entry, index);
+
+  if (notify) {
+    await sendDiscordNotification(entry, config);
+  }
 }
 
 function formatDuration(ms: number): string {
@@ -278,9 +287,31 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
+function mergeSnapshot(target: ScrapedWatchlist, source: ScrapedWatchlist): void {
+  for (const key of source.keys) {
+    target.keys.add(key);
+  }
+
+  for (const [key, entry] of source.entriesByKey) {
+    if (!target.entriesByKey.has(key)) {
+      target.entriesByKey.set(key, entry);
+    }
+  }
+}
+
 // Helper to scrape a source with error handling
-async function scrapeSource(sourceName: string, usernames: string[], announced: AnnouncedSets, scraper: (username: string, announced: AnnouncedSets, onEntry: (entry: MediaEntry) => Promise<void>) => Promise<void>, config: Config, onEntryProcessed: (entry: MediaEntry) => Promise<void>): Promise<MediaEntry[]> {
-  const entries: MediaEntry[] = [];
+async function scrapeSource(
+  sourceName: string,
+  usernames: string[],
+  index: EntryIndex,
+  scraper: (username: string, index: EntryIndex) => Promise<ScrapedWatchlist>,
+  config: Config,
+): Promise<SourceScrapeResult> {
+  const result: SourceScrapeResult = {
+    keys: new Set(),
+    entriesByKey: new Map(),
+    complete: true,
+  };
 
   for (const username of usernames) {
     const scrapeKey = `${sourceName.toLowerCase()}:${username}`;
@@ -289,11 +320,8 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
 
     try {
       console.log(`Starting ${sourceName} scrape for ${username}...`);
-      await scraper(username, announced, async (entry) => {
-        await processEntry(entry, config, announced);
-        await onEntryProcessed(entry);
-        entries.push(entry);
-      });
+      const snapshot = await scraper(username, index);
+      mergeSnapshot(result, snapshot);
       console.log(`✓ Completed ${sourceName} scrape for ${username}`);
 
       if (failureState) {
@@ -309,6 +337,7 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
         }
       }
     } catch (error) {
+      result.complete = false;
       console.error(`[ERROR] Failed to scrape ${sourceName} for ${username}:`, error);
       const now = Date.now();
       const threshold = config.failureNotificationThreshold;
@@ -347,38 +376,76 @@ async function scrapeSource(sourceName: string, usernames: string[], announced: 
     }
   }
 
-  return entries;
+  return result;
 }
 
 export async function refreshData(config: Config): Promise<void> {
   console.log("Refreshing data...");
-  const announced = await loadAnnouncedEntries();
+  const index = await loadEntryIndex();
 
   // Scrape sources sequentially to avoid overwhelming APIs (especially Jikan)
   // This prevents both scrapers from competing for rate limits
-  const letterboxdEntries = await scrapeSource(
+  const letterboxdSnapshot = await scrapeSource(
     "Letterboxd",
     config.letterboxd,
-    announced,
-    (username, announcedSets, onEntry) => scrapeLetterboxdWatchlist(username, announcedSets, onEntry, { flareSolverrUrl: config.flareSolverrUrl }),
+    index,
+    (username, entryIndex) => scrapeLetterboxdWatchlist(username, entryIndex, { flareSolverrUrl: config.flareSolverrUrl }),
     config,
-    async () => {},
   );
-  const malEntries = await scrapeSource("MyAnimeList", config.myanimelist, announced, scrapeMyAnimeListWatchlist, config, async () => {});
+  const malSnapshot = await scrapeSource("MyAnimeList", config.myanimelist, index, scrapeMyAnimeListWatchlist, config);
 
-  // Merge new entries with existing entries (avoid duplicates)
-  const newEntries = [...letterboxdEntries, ...malEntries];
-  const existingKeys = new Set(allEntries.map(getEntryKey));
+  const currentSnapshot: ScrapedWatchlist = {
+    keys: new Set(),
+    entriesByKey: new Map(),
+  };
+  mergeSnapshot(currentSnapshot, letterboxdSnapshot);
+  mergeSnapshot(currentSnapshot, malSnapshot);
 
-  for (const entry of newEntries) {
-    const key = getEntryKey(entry);
-    if (!existingKeys.has(key)) {
-      allEntries.push(entry);
-      existingKeys.add(key);
+  const activeByKey = new Map(index.activeByKey);
+  let addedCount = 0;
+  let restoredCount = 0;
+  let removedCount = 0;
+
+  for (const key of currentSnapshot.keys) {
+    if (activeByKey.has(key)) {
+      continue;
+    }
+
+    const entry = currentSnapshot.entriesByKey.get(key) ?? index.entriesByKey.get(key);
+    if (!entry) {
+      console.warn(`[WARN] Current item ${key} has no stored metadata; skipping add`);
+      continue;
+    }
+
+    const wasSeenBefore = index.historicalKeys.has(key);
+    await processActiveAdd(entry, config, index, !wasSeenBefore);
+    activeByKey.set(key, entry);
+
+    if (wasSeenBefore) {
+      restoredCount++;
+    } else {
+      addedCount++;
     }
   }
 
-  console.log(`Total entries: ${allEntries.length}`);
+  const canRemove = letterboxdSnapshot.complete && malSnapshot.complete;
+  if (canRemove) {
+    for (const [key, entry] of [...activeByKey]) {
+      if (currentSnapshot.keys.has(key)) {
+        continue;
+      }
+
+      await appendRemovedEntry(key, entry);
+      recordRemoval(index, key);
+      activeByKey.delete(key);
+      removedCount++;
+    }
+  } else {
+    console.log("[WARN] Skipping removals because one or more monitored source scrapes failed");
+  }
+
+  setAllEntries([...activeByKey.values()]);
+  console.log(`Total active entries: ${allEntries.length} (${addedCount} added, ${restoredCount} restored, ${removedCount} removed)`);
 }
 
 function formatListEntrySonarr(entry: MediaEntry): Record<string, unknown> {

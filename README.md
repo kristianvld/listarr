@@ -134,9 +134,11 @@ The application exposes the following endpoints for Radarr and Sonarr:
 
 1. **Scraping**: The application periodically scrapes watchlists from configured Letterboxd and MyAnimeList users
 2. **ID Resolution**: It maps titles to TMDB/TVDB IDs using lookup databases
-3. **Deduplication**: Entries are tracked in `announced.jsonl` to prevent duplicates
-4. **Endpoints**: Radarr and Sonarr can query the endpoints to get lists of content to add
-5. **Notifications**: Optional Discord notifications are sent when new content is found
+3. **Event Log**: Adds and removals are tracked in `announced.jsonl` so Listarr keeps history while serving only active entries
+4. **Removal Sync**: If an entry disappears from all monitored Letterboxd and MyAnimeList lists, Listarr appends a remove event and stops serving it
+5. **Failure Safety**: Removals are skipped when any monitored source/user fails to scrape, avoiding accidental removals from temporary upstream failures
+6. **Endpoints**: Radarr and Sonarr can query the endpoints to get lists of content to add
+7. **Notifications**: Optional Discord notifications are sent when new content is found
 
 ## Releases
 

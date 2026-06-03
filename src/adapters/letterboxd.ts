@@ -1,6 +1,7 @@
 import { fetchHtml, fetchJson, fetchHtmlViaFlareSolverr, fetchJsonViaFlareSolverr } from "../utils";
 import { idLookup } from "../id-lookup";
 import type { MediaEntry } from "./schemas";
+import { addCurrentEntry, addCurrentKey, createScrapedWatchlist, getKnownAliasKey, getLetterboxdSourceKey, type EntryIndex, type ScrapedWatchlist } from "../entry-state";
 import * as cheerio from "cheerio";
 
 // Rate limiting for Letterboxd requests to avoid overwhelming the server
@@ -37,11 +38,11 @@ function createLetterboxdFetchers(flareSolverrUrl?: string | null) {
 
 export async function scrapeLetterboxdWatchlist(
   username: string,
-  announced: { byKey: Set<string> },
-  onEntryProcessed: (entry: MediaEntry) => Promise<void>,
+  index: EntryIndex,
   options?: { flareSolverrUrl?: string | null },
-): Promise<void> {
+): Promise<ScrapedWatchlist> {
   const { fetchHtml: fetchLetterboxdHtml, fetchJson: fetchLetterboxdJson } = createLetterboxdFetchers(options?.flareSolverrUrl);
+  const snapshot = createScrapedWatchlist();
   // Handle pagination - start with page 1
   let currentPage = 1;
   let hasMorePages = true;
@@ -97,9 +98,11 @@ export async function scrapeLetterboxdWatchlist(
         continue;
       }
 
-      // Check if already processed (using slug + year as key)
-      const slugKey = `letterboxd:${slug}:${year}`;
-      if (announced.byKey.has(slugKey)) {
+      const slugKey = getLetterboxdSourceKey(slug, year);
+      const knownKey = getKnownAliasKey(index, slugKey);
+      if (knownKey) {
+        addCurrentKey(snapshot, knownKey);
+        pageFilmCount++;
         continue;
       }
 
@@ -116,11 +119,6 @@ export async function scrapeLetterboxdWatchlist(
           tmdbId = ids.tmdb;
           tvdbId = ids.tvdb;
           isAnime = ids.isAnime || false;
-        }
-
-        // Check if entry is already processed using slug key (most reliable check)
-        if (announced.byKey.has(slugKey)) {
-          continue;
         }
 
         // Get poster image URL from poster endpoint (most reliable)
@@ -190,22 +188,7 @@ export async function scrapeLetterboxdWatchlist(
           letterboxdSlug: slug,
         };
 
-        // Compute entryKey AFTER we have all IDs (including from film page)
-        const entryKey = tmdbId ? `tmdb:${tmdbId}` : tvdbId ? `tvdb:${tvdbId}` : `${title.trim()}:${year}:letterboxd:${username}`;
-
-        // Double-check using entryKey (in case slug key wasn't loaded)
-        if (announced.byKey.has(entryKey)) {
-          // Mark slug key as processed too
-          announced.byKey.add(slugKey);
-          continue;
-        }
-
-        // Process entry immediately (adds to announced.jsonl, sends Discord, adds to entries list)
-        await onEntryProcessed(entry);
-
-        // Mark as processed using both keys
-        announced.byKey.add(entryKey);
-        announced.byKey.add(slugKey);
+        addCurrentEntry(snapshot, index, entry);
 
         pageFilmCount++;
       } catch (error) {
@@ -225,4 +208,5 @@ export async function scrapeLetterboxdWatchlist(
   }
 
   console.log(`Finished processing Letterboxd watchlist for ${username}`);
+  return snapshot;
 }
