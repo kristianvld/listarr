@@ -7,6 +7,7 @@ node_modules
 # output
 out
 dist
+output/
 *.tgz
 
 # code coverage
@@ -33,7 +34,11 @@ data/
 # caches
 .eslintcache
 .cache
+.playwright-cli/
 *.tsbuildinfo
+
+# local design scratch
+mockups/
 
 # IntelliJ based IDEs
 .idea

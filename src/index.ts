@@ -23,24 +23,32 @@ async function main() {
   setAllEntries(existingEntries);
   console.log(`Loaded ${existingEntries.length} existing entries from announced.jsonl`);
 
-  // Initial data refresh
-  await refreshData(config);
+  const skipRefresh = process.env.LISTARR_SKIP_REFRESH === "1" || process.env.LISTARR_SKIP_REFRESH === "true";
+
+  if (skipRefresh) {
+    console.log("Skipping source refresh because LISTARR_SKIP_REFRESH is enabled");
+  } else {
+    // Initial data refresh
+    await refreshData(config);
+  }
 
   // Start HTTP server
   createServer(config);
 
-  // Set up periodic refresh
-  const intervalMs = config.refreshInterval * 1000;
-  setInterval(async () => {
-    try {
-      await refreshData(config);
-    } catch (error) {
-      console.error("[ERROR] Error during refresh:", error);
-      await sendDiscordErrorNotification(config, "Refresh Failed", "An error occurred during the scheduled data refresh", error);
-    }
-  }, intervalMs);
+  if (!skipRefresh) {
+    // Set up periodic refresh
+    const intervalMs = config.refreshInterval * 1000;
+    setInterval(async () => {
+      try {
+        await refreshData(config);
+      } catch (error) {
+        console.error("[ERROR] Error during refresh:", error);
+        await sendDiscordErrorNotification(config, "Refresh Failed", "An error occurred during the scheduled data refresh", error);
+      }
+    }, intervalMs);
 
-  console.log(`Refresh interval: ${config.refreshInterval} seconds`);
+    console.log(`Refresh interval: ${config.refreshInterval} seconds`);
+  }
 }
 
 main().catch(async (error) => {

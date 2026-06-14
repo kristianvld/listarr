@@ -151,10 +151,15 @@ async function traceToRootSeries(malId: number, originalType: string, announced:
         }
       }
 
-      // Look for Parent Story, Prequel, Sequel, or Full Story (which points to the main series)
-      // For movies that are part of a series, Sequel can point to the TV series
+      // Follow only one "backward" relation from the source item. Without that
+      // guard, a spin-off can climb to its parent and then incorrectly walk into
+      // the parent's prequel, e.g. PLUTO → Tetsuwan Atom → Atom: The Beginning.
       const parentRelation = relations.find(
-        (r) => r.relation === "Parent Story" || r.relation === "Prequel" || r.relation === "Full Story" || (isOriginalMovie && r.relation === "Sequel") // Only use Sequel for movies
+        (r) =>
+          r.relation === "Parent Story" ||
+          r.relation === "Full Story" ||
+          (currentId === malId && r.relation === "Prequel") ||
+          (currentId === malId && isOriginalMovie && r.relation === "Sequel") // Only use Sequel for the source movie
       );
 
       if (!parentRelation || parentRelation.entry.length === 0) {
@@ -198,6 +203,15 @@ async function traceToRootSeries(malId: number, originalType: string, announced:
   }
 }
 
+function inferMediaType(anime: { type: string; episodes?: number | null }, tracedToTV: boolean): "movie" | "tv" {
+  const isMovie = !tracedToTV && (anime.type === "Movie" || (anime.episodes === 1 && anime.type !== "TV"));
+  return isMovie ? "movie" : "tv";
+}
+
+function hasRequiredId(ids: { tmdb?: string; tvdb?: string } | null, mediaType: "movie" | "tv"): boolean {
+  return mediaType === "movie" ? Boolean(ids?.tmdb) : Boolean(ids?.tvdb);
+}
+
 export async function scrapeMyAnimeListWatchlist(username: string, index: EntryIndex): Promise<ScrapedWatchlist> {
   const snapshot = createScrapedWatchlist();
   let offset = 0;
@@ -222,7 +236,8 @@ export async function scrapeMyAnimeListWatchlist(username: string, index: EntryI
 
       // Check if this MAL ID is already processed
       const knownKey = getKnownMalKey(index, malEntry.anime_id);
-      if (knownKey) {
+      const knownEntry = knownKey ? index.entriesByKey.get(knownKey) : undefined;
+      if (knownKey && knownEntry?.malId === malEntry.anime_id && !knownEntry.rootMalId) {
         addCurrentKey(snapshot, knownKey);
         continue;
       }
@@ -232,32 +247,41 @@ export async function scrapeMyAnimeListWatchlist(username: string, index: EntryI
         const animeData = await jikanRequest<{ data: z.infer<typeof JikanAnimeSchema> }>(`/anime/${malEntry.anime_id}`);
         const anime = JikanAnimeSchema.parse(animeData.data);
 
-        // Trace to root series for all types (including movies that are part of a series)
         let rootMalId = malEntry.anime_id;
         let rootAnime = anime;
         const intermediaries: number[] = [];
+        const directIds = idLookup.getIdsFromMal(malEntry.anime_id);
+        let mediaType = inferMediaType(anime, false);
+        let ids = directIds;
 
-        // Try to trace to parent TV series (movies only trace if sandwiched between TV series)
-        rootMalId = await traceToRootSeries(malEntry.anime_id, anime.type, index, (malId) => {
-          intermediaries.push(malId);
-        });
+        // Prefer a direct MAL mapping. Relation tracing is only a fallback for
+        // specials/movies/OVAs that cannot be mapped to the target endpoint by themselves.
+        if (!hasRequiredId(directIds, mediaType)) {
+          rootMalId = await traceToRootSeries(malEntry.anime_id, anime.type, index, (malId) => {
+            intermediaries.push(malId);
+          });
 
-        // Check if root is already processed
-        const knownRootKey = getKnownMalKey(index, rootMalId);
-        if (knownRootKey) {
-          addCurrentKey(snapshot, knownRootKey);
-          // Mark this entry and intermediaries as processed
-          indexMalAlias(index, malEntry.anime_id, knownRootKey);
-          for (const interId of intermediaries) {
-            indexMalAlias(index, interId, knownRootKey);
+          // Check if root is already processed
+          const knownRootKey = rootMalId !== malEntry.anime_id ? getKnownMalKey(index, rootMalId) : undefined;
+          if (knownRootKey) {
+            addCurrentKey(snapshot, knownRootKey);
+            // Mark this entry and intermediaries as processed
+            indexMalAlias(index, malEntry.anime_id, knownRootKey);
+            for (const interId of intermediaries) {
+              indexMalAlias(index, interId, knownRootKey);
+            }
+            continue;
           }
-          continue;
-        }
 
-        // Get root anime details if different from original
-        if (rootMalId !== malEntry.anime_id) {
-          const rootData = await jikanRequest<{ data: z.infer<typeof JikanAnimeSchema> }>(`/anime/${rootMalId}`);
-          rootAnime = JikanAnimeSchema.parse(rootData.data);
+          // Get root anime details if different from original
+          if (rootMalId !== malEntry.anime_id) {
+            const rootData = await jikanRequest<{ data: z.infer<typeof JikanAnimeSchema> }>(`/anime/${rootMalId}`);
+            rootAnime = JikanAnimeSchema.parse(rootData.data);
+          }
+
+          const tracedToTV = rootMalId !== malEntry.anime_id && rootAnime.type === "TV";
+          mediaType = inferMediaType(rootAnime, tracedToTV);
+          ids = idLookup.getIdsFromMal(rootMalId);
         }
 
         // Extract year from aired date
@@ -289,8 +313,6 @@ export async function scrapeMyAnimeListWatchlist(username: string, index: EntryI
 
         const title = rootAnime.title_english || rootAnime.title;
 
-        // Get IDs from lookup service
-        const ids = idLookup.getIdsFromMal(rootMalId);
         let tvdbId: string | undefined;
         let tmdbId: string | undefined;
 
@@ -300,13 +322,6 @@ export async function scrapeMyAnimeListWatchlist(username: string, index: EntryI
         } else {
           console.warn(`[ERROR] No ID mapping found for MAL ID ${rootMalId} (${title})`);
         }
-
-        // Determine type based on root anime
-        // If we traced to a TV series, it's a TV show (even if original was a movie/OVA)
-        // Otherwise, standalone movies and single-episode OVAs/Specials are movies
-        const tracedToTV = rootMalId !== malEntry.anime_id && rootAnime.type === "TV";
-        const isRootMovie = !tracedToTV && (rootAnime.type === "Movie" || (rootAnime.episodes === 1 && rootAnime.type !== "TV"));
-        const mediaType = isRootMovie ? "movie" : "tv";
 
         // Get image URL from Jikan
         const imageUrl = rootAnime.images?.jpg?.large_image_url || rootAnime.images?.jpg?.image_url || rootAnime.images?.webp?.large_image_url || rootAnime.images?.webp?.image_url || undefined;

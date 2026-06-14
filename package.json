@@ -3,15 +3,35 @@
   "module": "src/index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "build:css": "tailwindcss -i src/app/styles.css -o src/app/tailwind.css",
+    "dev": "bun run build:css && bun --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@tailwindcss/cli": "^4.3.0",
+    "@types/bun": "latest",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
+    "@radix-ui/react-popover": "^1.1.16",
+    "@radix-ui/react-scroll-area": "^1.2.11",
+    "@radix-ui/react-tabs": "^1.1.14",
+    "@radix-ui/react-tooltip": "^1.2.9",
+    "@tanstack/react-query": "^5.101.0",
+    "@tanstack/react-router": "^1.170.15",
     "cheerio": "^1.1.2",
     "ky": "^1.14.0",
+    "lucide-react": "^1.17.0",
+    "motion": "^12.40.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.0",
     "zod": "^4.1.12"
   }
 }

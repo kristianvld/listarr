@@ -1,4 +1,5 @@
 import type { Config } from "./config";
+import app from "./app/index.html";
 import { scrapeLetterboxdWatchlist } from "./adapters/letterboxd";
 import { scrapeMyAnimeListWatchlist } from "./adapters/myanimelist";
 import { AnnouncedEntrySchema, EntryLogEventSchema, RemovedEntrySchema, type EntryLogEvent, type MediaEntry } from "./adapters/schemas";
@@ -11,6 +12,7 @@ import {
   type EntryIndex,
   type ScrapedWatchlist,
 } from "./entry-state";
+import { loadUiSnapshot } from "./ui-snapshot";
 import { httpClient, getDiscordRateLimitInfo } from "./utils";
 
 // Use data directory if specified via env, otherwise default to current directory (for local development)
@@ -496,34 +498,69 @@ function filterEntries(type: "movie" | "tv", anime: boolean, requireId: "tmdb" |
 export function createServer(config: Config) {
   const server = Bun.serve({
     port: config.port,
-    async fetch(req) {
-      const url = new URL(req.url);
-      const pathname = url.pathname;
+    routes: {
+      "/": app,
+      "/index.html": app,
+      "/api/ui/snapshot": async () => {
+        return new Response(JSON.stringify(await loadUiSnapshot()), {
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+      "/api/ui/poster": async (req) => {
+        const target = new URL(req.url).searchParams.get("url");
+        if (!target) return new Response("Missing url", { status: 400 });
 
-      // Radarr endpoints
-      if (pathname === "/radarr/anime") {
+        let posterUrl: URL;
+        try {
+          posterUrl = new URL(target);
+        } catch {
+          return new Response("Invalid url", { status: 400 });
+        }
+
+        if (posterUrl.protocol !== "https:" && posterUrl.protocol !== "http:") {
+          return new Response("Unsupported url", { status: 400 });
+        }
+
+        const upstream = await fetch(posterUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 Listarr",
+          },
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (!upstream.ok || !upstream.body) {
+          return new Response("Poster unavailable", { status: 502 });
+        }
+
+        return new Response(upstream.body, {
+          headers: {
+            "Cache-Control": "public, max-age=86400",
+            "Content-Type": upstream.headers.get("Content-Type") ?? "image/jpeg",
+          },
+        });
+      },
+      "/radarr/anime": () => {
         return new Response(JSON.stringify(filterEntries("movie", true, "tmdb").map(formatListEntryRadarr)), {
           headers: { "Content-Type": "application/json" },
         });
-      }
-      if (pathname === "/radarr/movies") {
+      },
+      "/radarr/movies": () => {
         return new Response(JSON.stringify(filterEntries("movie", false, "tmdb").map(formatListEntryRadarr)), {
           headers: { "Content-Type": "application/json" },
         });
-      }
-
-      // Sonarr endpoints
-      if (pathname === "/sonarr/anime") {
+      },
+      "/sonarr/anime": () => {
         return new Response(JSON.stringify(filterEntries("tv", true, "tvdb").map(formatListEntrySonarr)), {
           headers: { "Content-Type": "application/json" },
         });
-      }
-      if (pathname === "/sonarr/shows") {
+      },
+      "/sonarr/shows": () => {
         return new Response(JSON.stringify(filterEntries("tv", false, "tvdb").map(formatListEntrySonarr)), {
           headers: { "Content-Type": "application/json" },
         });
-      }
-
+      },
+    },
+    fetch() {
       return new Response("Not Found", { status: 404 });
     },
   });

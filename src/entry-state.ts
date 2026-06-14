@@ -56,7 +56,7 @@ function isIntermediaryEntry(entry: { title: string }): boolean {
 }
 
 function stripRuntimeFields(entry: MediaEntry): MediaEntry {
-  const { imageUrl, episodes, intermediaryMalIds, ...persistedEntry } = entry;
+  const { episodes, intermediaryMalIds, ...persistedEntry } = entry;
   return persistedEntry;
 }
 
