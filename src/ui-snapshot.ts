@@ -5,7 +5,8 @@ const DATA_DIR = process.env.DATA_DIR || ".";
 const ANNOUNCED_FILE = `${DATA_DIR}/announced.jsonl`;
 const MAL_META_CACHE_FILE = `${DATA_DIR}/ui-mal-cache.json`;
 const POSTER_CACHE_FILE = `${DATA_DIR}/ui-poster-cache.json`;
-const POSTER_HYDRATE_LIMIT = Number.parseInt(process.env.LISTARR_POSTER_HYDRATE_LIMIT ?? "120", 10);
+const POSTER_FETCH_TIMEOUT_MS = Number.parseInt(process.env.LISTARR_POSTER_FETCH_TIMEOUT_MS ?? "2500", 10);
+const POSTER_HYDRATE_LIMIT = Number.parseInt(process.env.LISTARR_POSTER_HYDRATE_LIMIT ?? "4", 10);
 const POSTER_HYDRATE_CONCURRENCY = 4;
 const POSTER_FAILURE_RETRY_MS = 12 * 60 * 60 * 1000;
 
@@ -323,7 +324,7 @@ async function fetchPosterUrl(entry: MediaEntry): Promise<string | undefined> {
       headers: {
         "User-Agent": "Listarr UI snapshot poster lookup",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(POSTER_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) return undefined;
     return extractMetaImage(await response.text());

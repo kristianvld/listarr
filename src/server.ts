@@ -12,12 +12,13 @@ import {
   type EntryIndex,
   type ScrapedWatchlist,
 } from "./entry-state";
-import { loadUiSnapshot } from "./ui-snapshot";
+import { loadUiSnapshot, type UiSnapshot } from "./ui-snapshot";
 import { httpClient, getDiscordRateLimitInfo } from "./utils";
 
 // Use data directory if specified via env, otherwise default to current directory (for local development)
 const DATA_DIR = process.env.DATA_DIR || ".";
 const ANNOUNCED_FILE = `${DATA_DIR}/announced.jsonl`;
+const UI_SNAPSHOT_CACHE_MS = Number.parseInt(process.env.LISTARR_UI_SNAPSHOT_CACHE_MS ?? "10000", 10);
 
 type FailureState = {
   consecutiveFailures: number;
@@ -34,6 +35,8 @@ type SourceScrapeResult = ScrapedWatchlist & {
 const failingScrapes = new Map<string, FailureState>(); // Key: "source:username"
 
 let allEntries: MediaEntry[] = [];
+let uiSnapshotCache: { expiresAt: number; snapshot: UiSnapshot } | undefined;
+let uiSnapshotRequest: Promise<UiSnapshot> | undefined;
 
 export function setAllEntries(entries: MediaEntry[]): void {
   allEntries = entries;
@@ -495,14 +498,39 @@ function filterEntries(type: "movie" | "tv", anime: boolean, requireId: "tmdb" |
   return allEntries.filter((e) => e.type === type && e.anime === anime && e[requireId] !== undefined && !e.title.startsWith("[Intermediary:"));
 }
 
+function uiSnapshotCacheMs(): number {
+  return Number.isFinite(UI_SNAPSHOT_CACHE_MS) ? Math.max(0, UI_SNAPSHOT_CACHE_MS) : 10000;
+}
+
+async function getCachedUiSnapshot(): Promise<UiSnapshot> {
+  const now = Date.now();
+  if (uiSnapshotCache && uiSnapshotCache.expiresAt > now) return uiSnapshotCache.snapshot;
+  if (uiSnapshotRequest) return uiSnapshotRequest;
+
+  uiSnapshotRequest = loadUiSnapshot()
+    .then((snapshot) => {
+      uiSnapshotCache = {
+        expiresAt: Date.now() + uiSnapshotCacheMs(),
+        snapshot,
+      };
+      return snapshot;
+    })
+    .finally(() => {
+      uiSnapshotRequest = undefined;
+    });
+
+  return uiSnapshotRequest;
+}
+
 export function createServer(config: Config) {
   const server = Bun.serve({
+    idleTimeout: Number.parseInt(process.env.LISTARR_IDLE_TIMEOUT ?? "60", 10),
     port: config.port,
     routes: {
       "/": app,
       "/index.html": app,
       "/api/ui/snapshot": async () => {
-        return new Response(JSON.stringify(await loadUiSnapshot()), {
+        return new Response(JSON.stringify(await getCachedUiSnapshot()), {
           headers: { "Content-Type": "application/json" },
         });
       },
