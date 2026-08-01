@@ -109,6 +109,10 @@ export async function fetchHtmlViaFlareSolverr(url: string, flareSolverrUrl: str
     throw new Error(`[FlareSolverr] ${data.message || "Unknown error"}`);
   }
 
+  if (data.solution.status === undefined || data.solution.status < 200 || data.solution.status >= 300) {
+    throw new Error(`[FlareSolverr] Upstream returned HTTP ${data.solution.status ?? "unknown"} for ${url}`);
+  }
+
   return data.solution.response;
 }
 

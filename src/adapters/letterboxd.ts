@@ -22,7 +22,19 @@ async function rateLimitedRequest<T>(fn: () => Promise<T>): Promise<T> {
   return fn();
 }
 
-function createLetterboxdFetchers(flareSolverrUrl?: string | null) {
+type LetterboxdFetchers = {
+  fetchHtml: (url: string) => Promise<string>;
+  fetchJson: (url: string) => Promise<unknown>;
+};
+
+export type LetterboxdScrapeOptions = {
+  flareSolverrUrl?: string | null;
+  fetchers?: LetterboxdFetchers;
+};
+
+function createLetterboxdFetchers(flareSolverrUrl?: string | null, overrides?: LetterboxdFetchers) {
+  if (overrides) return overrides;
+
   if (flareSolverrUrl) {
     return {
       fetchHtml: (url: string) => fetchHtmlViaFlareSolverr(url, flareSolverrUrl),
@@ -36,28 +48,81 @@ function createLetterboxdFetchers(flareSolverrUrl?: string | null) {
   };
 }
 
+function inspectWatchlistPage(html: string, currentPage: number) {
+  const $ = cheerio.load(html);
+  const title = $("title").text().trim();
+  const bodyClasses = $("body").attr("class") ?? "";
+  const watchlistContent = $(".js-watchlist-content[data-num-entries]").first();
+
+  if (!$("body").hasClass("watchlist") || watchlistContent.length === 0) {
+    throw new Error(
+      `Invalid Letterboxd watchlist page ${currentPage}: missing watchlist structure ` +
+        `(title=${JSON.stringify(title)}, bodyClasses=${JSON.stringify(bodyClasses)}, bytes=${html.length})`,
+    );
+  }
+
+  const rawExpectedTotal = watchlistContent.attr("data-num-entries") ?? "";
+  if (!/^\d+$/.test(rawExpectedTotal)) {
+    throw new Error(`Invalid Letterboxd watchlist page ${currentPage}: invalid data-num-entries=${JSON.stringify(rawExpectedTotal)}`);
+  }
+
+  return {
+    $,
+    expectedTotal: Number.parseInt(rawExpectedTotal, 10),
+    gridItems: $("li.griditem").toArray(),
+    nextPageLink: $("div.pagination a.next").attr("href"),
+  };
+}
+
 export async function scrapeLetterboxdWatchlist(
   username: string,
   index: EntryIndex,
-  options?: { flareSolverrUrl?: string | null },
+  options?: LetterboxdScrapeOptions,
 ): Promise<ScrapedWatchlist> {
-  const { fetchHtml: fetchLetterboxdHtml, fetchJson: fetchLetterboxdJson } = createLetterboxdFetchers(options?.flareSolverrUrl);
+  const { fetchHtml: fetchLetterboxdHtml, fetchJson: fetchLetterboxdJson } = createLetterboxdFetchers(options?.flareSolverrUrl, options?.fetchers);
   const snapshot = createScrapedWatchlist();
   // Handle pagination - start with page 1
   let currentPage = 1;
   let hasMorePages = true;
+  let expectedTotal: number | undefined;
+  let totalFilmCount = 0;
 
   while (hasMorePages) {
     const url = currentPage === 1 ? `https://letterboxd.com/${username}/watchlist/` : `https://letterboxd.com/${username}/watchlist/page/${currentPage}/`;
 
     const html = await rateLimitedRequest(() => fetchLetterboxdHtml(url));
-    const $ = cheerio.load(html);
+    const page = inspectWatchlistPage(html, currentPage);
+    const { $, gridItems, nextPageLink } = page;
+
+    if (expectedTotal === undefined) {
+      expectedTotal = page.expectedTotal;
+    } else if (page.expectedTotal !== expectedTotal) {
+      throw new Error(
+        `Invalid Letterboxd watchlist page ${currentPage}: declared total changed from ${expectedTotal} to ${page.expectedTotal}`,
+      );
+    }
+
+    if (expectedTotal === 0) {
+      if (currentPage !== 1 || gridItems.length !== 0 || nextPageLink) {
+        throw new Error(`Invalid Letterboxd empty watchlist response on page ${currentPage}`);
+      }
+
+      console.log(`Letterboxd watchlist for ${username} is explicitly empty.`);
+      hasMorePages = false;
+      continue;
+    }
+
+    if (gridItems.length === 0) {
+      throw new Error(
+        `Invalid Letterboxd watchlist page ${currentPage}: declared ${expectedTotal} total films but returned no film items`,
+      );
+    }
 
     // Letterboxd watchlist uses li.griditem with data attributes
     let pageFilmCount = 0;
 
     // Process each film immediately as we find it
-    for (const element of $("li.griditem").toArray()) {
+    for (const element of gridItems) {
       const $el = $(element);
       const $reactComponent = $el.find("div.react-component[data-item-slug]");
 
@@ -196,12 +261,25 @@ export async function scrapeLetterboxdWatchlist(
       }
     }
 
+    totalFilmCount += pageFilmCount;
+
+    if (pageFilmCount !== gridItems.length) {
+      throw new Error(
+        `Invalid Letterboxd watchlist page ${currentPage}: parsed ${pageFilmCount} of ${gridItems.length} film items`,
+      );
+    }
+
     // Check for next page
-    const nextPageLink = $("div.pagination a.next").attr("href");
     if (nextPageLink) {
       currentPage++;
       console.log(`Moving to page ${currentPage} for ${username}`);
     } else {
+      if (totalFilmCount !== expectedTotal) {
+        throw new Error(
+          `Incomplete Letterboxd watchlist for ${username}: parsed ${totalFilmCount} of ${expectedTotal} declared films`,
+        );
+      }
+
       hasMorePages = false;
       console.log(`No more pages for ${username}. Processed ${pageFilmCount} films on final page.`);
     }

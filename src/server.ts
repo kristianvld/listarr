@@ -367,6 +367,7 @@ async function scrapeSource(
         const duration = formatDuration(durationMs);
         const attempts = failureState.consecutiveFailures;
         failingScrapes.delete(scrapeKey);
+        console.log(`✓ ${sourceName} scrape for ${username} recovered after ${attempts} failed attempt(s) over ${duration}`);
 
         // If this scrape was previously notified, notify that it's working again
         if (wasNotified) {
@@ -376,7 +377,6 @@ async function scrapeSource(
       }
     } catch (error) {
       result.complete = false;
-      console.error(`[ERROR] Failed to scrape ${sourceName} for ${username}:`, error);
       const now = Date.now();
       const threshold = config.failureNotificationThreshold;
       const repeatIntervalMs = config.failureNotificationRepeatIntervalSeconds * 1000;
@@ -394,6 +394,10 @@ async function scrapeSource(
 
       failingScrapes.set(scrapeKey, nextFailureState);
 
+      if (!failureState) {
+        console.error(`[ERROR] ${sourceName} scrape for ${username} entered failed state; removals will be skipped until it recovers:`, error);
+      }
+
       const shouldNotifyInitial = nextFailureState.consecutiveFailures >= threshold && !nextFailureState.lastNotifiedAt;
       const shouldNotifyRepeat =
         nextFailureState.lastNotifiedAt !== undefined &&
@@ -407,8 +411,6 @@ async function scrapeSource(
         await sendDiscordErrorNotification(config, `Failed to Scrape ${sourceName}`, description, error);
         nextFailureState.lastNotifiedAt = now;
         failingScrapes.set(scrapeKey, nextFailureState);
-      } else if (nextFailureState.consecutiveFailures >= threshold) {
-        console.log(`[WARN] Suppressing duplicate ${sourceName} failure notification for ${username}`);
       }
       // Continue with next username even if this one fails
     }
@@ -456,7 +458,7 @@ export async function refreshData(config: Config): Promise<void> {
     }
 
     const wasSeenBefore = index.historicalKeys.has(key);
-    await processActiveAdd(entry, config, index, !wasSeenBefore);
+    await processActiveAdd(entry, config, index, true);
     activeByKey.set(key, entry);
 
     if (wasSeenBefore) {
