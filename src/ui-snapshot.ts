@@ -1,3 +1,4 @@
+import { ANIME_API_BASE_URL } from "./anime-provider";
 import { EntryLogEventSchema, type EntryLogEvent, type MediaEntry } from "./adapters/schemas";
 import { buildEntryIndex, getEntryKey } from "./entry-state";
 
@@ -219,7 +220,7 @@ function readJikanYear(data: Record<string, unknown>): number | undefined {
 
 async function fetchMalMeta(malId: number): Promise<MalMetaCacheEntry | undefined> {
   try {
-    const response = await fetch(`https://api.jikan.moe/v4/anime/${malId}`, {
+    const response = await fetch(`${ANIME_API_BASE_URL}/anime/${malId}`, {
       headers: {
         "User-Agent": "Listarr UI snapshot MAL metadata lookup",
       },

@@ -1,3 +1,4 @@
+import { ANIME_API_BASE_URL } from "../anime-provider";
 import { z } from "zod";
 import { fetchJson, fetchJsonResponse, getRetryAfterSeconds } from "../utils";
 import { MyAnimeListEntrySchema, JikanAnimeSchema, type MediaEntry } from "./schemas";
@@ -12,7 +13,7 @@ import {
   type ScrapedWatchlist,
 } from "../entry-state";
 
-const JIKAN_BASE = "https://api.jikan.moe/v4";
+const JIKAN_BASE = ANIME_API_BASE_URL;
 
 // Rate limiting: Jikan allows 3 requests/second, 60 requests/minute
 // Be very conservative: aim for 2 requests/second to stay well under limits

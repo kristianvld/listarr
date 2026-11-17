@@ -174,3 +174,5 @@ bun run src/index.ts
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+Anime metadata and relations use Tenrai by default. Set `ANIME_API_BASE_URL` to override the compatible API base URL, including its version path. Both scraping and UI metadata use this setting.
