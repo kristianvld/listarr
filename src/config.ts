@@ -41,7 +41,7 @@ export async function loadConfig(): Promise<Config> {
   const envData: Partial<z.infer<typeof ConfigSchema>> = {
     letterboxd: parseEnvArray("LETTERBOXD_USERS"),
     myanimelist: parseEnvArray("MYANIMELIST_USERS"),
-    discordWebhook: process.env.DISCORD_WEBHOOK || undefined,
+    discordWebhook: process.env.DISABLE_DISCORD_NOTIFICATIONS === "1" ? null : process.env.DISCORD_WEBHOOK || undefined,
     flareSolverrUrl: process.env.FLARESOLVERR_URL || undefined,
     port: process.env.PORT ? parseInt(process.env.PORT, 10) : undefined,
     refreshInterval: process.env.REFRESH_INTERVAL ? parseInt(process.env.REFRESH_INTERVAL, 10) : undefined,
