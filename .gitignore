@@ -45,3 +45,5 @@ mockups/
 
 # Finder (MacOS) folder config
 .DS_Store
+
+.dev-data/

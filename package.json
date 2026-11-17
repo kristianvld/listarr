@@ -5,33 +5,37 @@
   "private": true,
   "scripts": {
     "build:css": "tailwindcss -i src/app/styles.css -o src/app/tailwind.css",
-    "dev": "bun run build:css && bun --hot src/index.ts",
+    "dev": "bun run build:css && HOST=127.0.0.1 DISABLE_DISCORD_NOTIFICATIONS=1 DATA_DIR=.dev-data bun --hot src/index.ts",
     "start": "bun src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "audit": "bun audit --audit-level=high"
   },
   "devDependencies": {
-    "@tailwindcss/cli": "^4.3.0",
-    "@types/bun": "latest",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "@tailwindcss/cli": "^4.3.5",
+    "@types/bun": "^1.4.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^5.9.3",
+    "tailwindcss": "^4.3.5"
   },
   "dependencies": {
-    "@radix-ui/react-popover": "^1.1.16",
-    "@radix-ui/react-scroll-area": "^1.2.11",
-    "@radix-ui/react-tabs": "^1.1.14",
-    "@radix-ui/react-tooltip": "^1.2.9",
-    "@tanstack/react-query": "^5.101.0",
-    "@tanstack/react-router": "^1.170.15",
-    "cheerio": "^1.1.2",
-    "ky": "^1.14.0",
-    "lucide-react": "^1.17.0",
-    "motion": "^12.40.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "tailwindcss": "^4.3.0",
-    "zod": "^4.1.12"
+    "@radix-ui/react-popover": "^1.3.1",
+    "@radix-ui/react-scroll-area": "^1.4.0",
+    "@radix-ui/react-tabs": "^1.2.1",
+    "@radix-ui/react-tooltip": "^1.4.1",
+    "@tanstack/react-query": "^5.108.0",
+    "@tanstack/react-router": "^1.170.46",
+    "cheerio": "^1.2.0",
+    "ky": "^1.14.3",
+    "lucide-react": "^1.74.0",
+    "motion": "^12.43.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "packageManager": "bun@1.4.4",
+  "engines": {
+    "bun": ">=1.4.4"
   }
 }

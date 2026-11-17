@@ -1,3 +1,6 @@
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+import { proxyPoster } from "./poster-proxy";
 import type { Config } from "./config";
 import app from "./app/index.html";
 import { scrapeLetterboxdWatchlist } from "./adapters/letterboxd";
@@ -77,10 +80,8 @@ async function loadEntryIndex(): Promise<EntryIndex> {
 
 async function appendEntryLogEvent(event: EntryLogEvent): Promise<void> {
   const line = JSON.stringify(event) + "\n";
-  const file = Bun.file(ANNOUNCED_FILE);
-  const existingContent = (await file.exists()) ? await file.text() : "";
-  // Bun.write() automatically creates parent directories if they don't exist
-  await Bun.write(ANNOUNCED_FILE, existingContent + line);
+  await mkdir(dirname(ANNOUNCED_FILE), { recursive: true });
+  await appendFile(ANNOUNCED_FILE, line, { mode: 0o600 });
 }
 
 async function appendAnnouncedEntry(entry: MediaEntry): Promise<void> {
@@ -146,7 +147,7 @@ async function sendDiscordWebhook(webhookUrl: string, embed: Record<string, unkn
       }
     }
 
-    console.warn("[ERROR] Failed to send Discord webhook:", error);
+    console.warn("[ERROR] Failed to send Discord webhook:", statusCode ? `HTTP ${statusCode}` : error instanceof Error ? error.name : "Network error");
   }
 }
 
@@ -528,6 +529,7 @@ export function createServer(config: Config) {
   const server = Bun.serve({
     idleTimeout: Number.parseInt(process.env.LISTARR_IDLE_TIMEOUT ?? "60", 10),
     port: config.port,
+    hostname: process.env.HOST || "0.0.0.0",
     routes: {
       "/": app,
       "/index.html": app,
@@ -536,39 +538,7 @@ export function createServer(config: Config) {
           headers: { "Content-Type": "application/json" },
         });
       },
-      "/api/ui/poster": async (req) => {
-        const target = new URL(req.url).searchParams.get("url");
-        if (!target) return new Response("Missing url", { status: 400 });
-
-        let posterUrl: URL;
-        try {
-          posterUrl = new URL(target);
-        } catch {
-          return new Response("Invalid url", { status: 400 });
-        }
-
-        if (posterUrl.protocol !== "https:" && posterUrl.protocol !== "http:") {
-          return new Response("Unsupported url", { status: 400 });
-        }
-
-        const upstream = await fetch(posterUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 Listarr",
-          },
-          signal: AbortSignal.timeout(10000),
-        });
-
-        if (!upstream.ok || !upstream.body) {
-          return new Response("Poster unavailable", { status: 502 });
-        }
-
-        return new Response(upstream.body, {
-          headers: {
-            "Cache-Control": "public, max-age=86400",
-            "Content-Type": upstream.headers.get("Content-Type") ?? "image/jpeg",
-          },
-        });
-      },
+      "/api/ui/poster": (req) => proxyPoster(new URL(req.url).searchParams.get("url")),
       "/radarr/anime": () => {
         return new Response(JSON.stringify(filterEntries("movie", true, "tmdb").map(formatListEntryRadarr)), {
           headers: { "Content-Type": "application/json" },

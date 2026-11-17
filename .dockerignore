@@ -11,3 +11,11 @@ docker-compose.yml
 Dockerfile
 .dockerignore
 
+
+.env.*
+mockups/
+output/
+.cursor/
+.playwright-cli/
+
+.dev-data/

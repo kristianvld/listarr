@@ -177,3 +177,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 Anime metadata and relations use Tenrai by default. Set `ANIME_API_BASE_URL` to override the compatible API base URL, including its version path. Both scraping and UI metadata use this setting.
 Set `DISABLE_DISCORD_NOTIFICATIONS=1` to suppress Discord notifications, including webhooks configured in config.json.
+
+## Development safety
+
+Use Bun 1.4.4. `bun run dev` binds to localhost and keeps development data in `.dev-data/`. Access a remote development server through an SSH tunnel. Production keeps its configured data directory.
+Development disables Discord notifications. Keep `config.json` private and untracked. The poster proxy accepts only HTTPS image responses from the supported artwork CDNs and validates redirects.

@@ -1,0 +1,30 @@
+name: Runtime security
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+permissions:
+  packages: read
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Log in to the container registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Export the published image
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          docker pull "$image"
+          docker save "$image" --output "$RUNNER_TEMP/runtime.tar"
+      - name: Check OS and language vulnerabilities
+        run: |
+          docker run --rm --cpus=2 --memory=2g --pids-limit=128 \
+            -v "$RUNNER_TEMP/runtime.tar:/scan/runtime.tar:ro" \
+            aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
+            image --input /scan/runtime.tar --scanners vuln \
+            --severity HIGH,CRITICAL --exit-code 1 --no-progress

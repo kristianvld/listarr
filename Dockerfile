@@ -1,22 +1,21 @@
-FROM oven/bun:1 AS base
+FROM oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a AS base
+USER root
+RUN apk upgrade --no-cache
 WORKDIR /app
 
-# Install dependencies
+FROM base AS build
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
+COPY src ./src
+RUN bun run build:css
 
-# Copy source code
-COPY . .
-
-# Create data directory for persistent storage
-RUN mkdir -p /app/data
-
-# Set default data directory for Docker (can be overridden via env)
+FROM base AS runtime
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production --ignore-scripts
+COPY --from=build /app/src ./src
+COPY tsconfig.json ./
+RUN chmod -R a+rX /app/src /app/tsconfig.json && mkdir -p /app/data && chown bun:bun /app/data
 ENV DATA_DIR=/app/data
-
-# Expose port (default 3000, configurable via env)
 EXPOSE 3000
-
-# Run the application
+USER bun
 CMD ["bun", "run", "src/index.ts"]
-

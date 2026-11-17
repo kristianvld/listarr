@@ -38,12 +38,17 @@ async function main() {
   if (!skipRefresh) {
     // Set up periodic refresh
     const intervalMs = config.refreshInterval * 1000;
+    let refreshing = false;
     setInterval(async () => {
+      if (refreshing) return;
+      refreshing = true;
       try {
         await refreshData(config);
       } catch (error) {
         console.error("[ERROR] Error during refresh:", error);
         await sendDiscordErrorNotification(config, "Refresh Failed", "An error occurred during the scheduled data refresh", error);
+      } finally {
+        refreshing = false;
       }
     }, intervalMs);
 
