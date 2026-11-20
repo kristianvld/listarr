@@ -76,6 +76,60 @@ const films: FixtureFilm[] = [
   { slug: "gamma", title: "Gamma", year: 2003, tmdb: "103" },
 ];
 
+describe("Letterboxd poster lookups through FlareSolverr", () => {
+  const filmPageUrl = "https://letterboxd.com/film/alpha/";
+  const posterUrl = "https://a.ltrbxd.com/resized/alpha-poster.jpg?size=250&v=1";
+  const filmPagePosterUrl = "https://a.ltrbxd.com/resized/alpha-poster.jpg?size=600";
+  const posterJson = JSON.stringify({ url: posterUrl });
+  const browserPosterDocument = `
+    <html>
+      <head><meta name="color-scheme" content="light dark"><meta charset="utf-8"></head>
+      <body><pre>${posterJson.replaceAll("&", "&amp;")}</pre><div class="json-formatter-container"></div></body>
+    </html>
+  `;
+  const responses = {
+    [watchlistUrl]: watchlistPage(1, films.slice(0, 1)),
+    [filmPageUrl]: `
+      <meta property="og:image" content="https://a.ltrbxd.com/alpha-backdrop.jpg">
+      <script type="application/ld+json">
+        /* <![CDATA[ */
+        {"@type":"Movie","image":"${filmPagePosterUrl}"}
+        /* ]]> */
+      </script>
+      <a href="https://www.themoviedb.org/movie/101">TMDB</a>
+    `,
+  };
+
+  test.each([
+    ["raw JSON", posterJson, posterUrl],
+    ["browser-wrapped JSON", browserPosterDocument, posterUrl],
+    ["an unusable endpoint response", "<html><body>Poster unavailable</body></html>", filmPagePosterUrl],
+  ])("finds a poster with %s", async (_description, posterResponse, expectedUrl) => {
+    const pages: Record<string, string> = { ...responses, [`${filmPageUrl}poster/std/250/`]: posterResponse };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const { url } = await request.json() as { url: string };
+        const response = pages[url];
+        return Response.json({
+          status: "ok",
+          solution: { status: response === undefined ? 404 : 200, response: response ?? "Not found" },
+        });
+      },
+    });
+
+    try {
+      const snapshot = await scrapeLetterboxdWatchlist(username, createEntryIndex(), {
+        flareSolverrUrl: server.url.href,
+      });
+      expect(snapshot.entriesByKey.get("tmdb:101")?.imageUrl).toBe(expectedUrl);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe("Letterboxd watchlist completeness validation", () => {
   test("accepts a complete multi-page watchlist", async () => {
     const snapshot = await scrapeLetterboxdWatchlist(username, indexFilms(films), {

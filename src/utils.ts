@@ -1,3 +1,4 @@
+import { load } from "cheerio";
 import ky from "ky";
 
 // Create a ky instance with default retry and timeout settings
@@ -120,7 +121,9 @@ export async function fetchHtmlViaFlareSolverr(url: string, flareSolverrUrl: str
 export async function fetchJsonViaFlareSolverr(url: string, flareSolverrUrl: string): Promise<unknown> {
   const raw = await fetchHtmlViaFlareSolverr(url, flareSolverrUrl);
   try {
-    return JSON.parse(raw);
+    // FlareSolverr returns Chromium's rendered document, which can wrap JSON in a pre element.
+    const json = raw.trimStart().startsWith("<") ? load(raw)("body > pre:first-child").text() : raw;
+    return JSON.parse(json);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`[FlareSolverr] Failed to parse JSON response from ${url}: ${message}`);

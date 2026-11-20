@@ -48,6 +48,19 @@ function createLetterboxdFetchers(flareSolverrUrl?: string | null, overrides?: L
   };
 }
 
+function getFilmPagePoster($: cheerio.CheerioAPI): string | undefined {
+  const json = $('script[type="application/ld+json"]').first().text().trim()
+    .replace(/^\/\*\s*<!\[CDATA\[\s*\*\//, "")
+    .replace(/\/\*\s*\]\]>\s*\*\/$/, "");
+
+  try {
+    const data = JSON.parse(json) as { image?: unknown } | null;
+    return typeof data?.image === "string" ? data.image : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function inspectWatchlistPage(html: string, currentPage: number) {
   const $ = cheerio.load(html);
   const title = $("title").text().trim();
@@ -132,9 +145,6 @@ export async function scrapeLetterboxdWatchlist(
       const slug = $reactComponent.attr("data-item-slug");
       if (!slug) continue;
 
-      // Get film ID from data-film-id (used for constructing poster URL)
-      const filmId = $reactComponent.attr("data-film-id");
-
       // Get title from data-item-name (format: "Title (Year)" or just "Title")
       const itemName = $reactComponent.attr("data-item-name") || "";
       if (!itemName) continue;
@@ -189,28 +199,23 @@ export async function scrapeLetterboxdWatchlist(
         // Get poster image URL from poster endpoint (most reliable)
         try {
           const posterJsonUrl = `https://letterboxd.com/film/${slug}/poster/std/250/`;
-          const posterData = (await rateLimitedRequest(() => fetchLetterboxdJson(posterJsonUrl))) as { url?: string };
-          if (posterData?.url) {
+          const posterData = (await rateLimitedRequest(() => fetchLetterboxdJson(posterJsonUrl))) as { url?: unknown } | null;
+          if (typeof posterData?.url === "string" && posterData.url) {
             imageUrl = posterData.url;
           }
-        } catch (error) {
-          // Fallback to constructed URL if poster endpoint fails
+        } catch {
+          // Try the poster embedded in the film page.
         }
 
-        // Fallback: Construct poster image URL from film ID and slug (works for most films)
-        if (!imageUrl && filmId) {
-          // Poster URL pattern: https://a.ltrbxd.com/resized/film-poster/{digits}/{film_id}-{slug}-0-250-0-375-crop.jpg
-          // Where digits are individual digits of film ID separated by slashes
-          const filmIdDigits = filmId.split("").join("/");
-          imageUrl = `https://a.ltrbxd.com/resized/film-poster/${filmIdDigits}/${filmId}-${slug}-0-250-0-375-crop.jpg`;
-        }
-
-        // Only fetch film page if we need fallback ID/anime detection
-        if (!tmdbId || !isAnime) {
+        if (!imageUrl || !tmdbId || !isAnime) {
           try {
             const filmPageUrl = `https://letterboxd.com/film/${slug}/`;
             const filmPageHtml = await rateLimitedRequest(() => fetchLetterboxdHtml(filmPageUrl));
             const $filmPage = cheerio.load(filmPageHtml);
+
+            if (!imageUrl) {
+              imageUrl = getFilmPagePoster($filmPage);
+            }
 
             // Fallback: Look for TMDB link if not found in lookup
             if (!tmdbId) {
